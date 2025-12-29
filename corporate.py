@@ -733,12 +733,6 @@ with tab2:
                     height=min(900, 40 + 32 * (len(df_hpct) + 2))
                 )
 
-            st.markdown("#### Horizontal (Δ absoluto vs período anterior)")
-            st.dataframe(
-                df_habs.style.format({a: "R$ {:,.0f}" for a in anos_ok}),
-                use_container_width=True,
-                height=min(900, 40 + 32 * (len(df_habs) + 2))
-            )
 
         # =================================================
         # SUBABA 2 — PMR / PME / PMP
