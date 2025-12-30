@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import plotly.graph_objects as go
 
 st.set_page_config(
     page_title="Análise Econômico-Financeira",
@@ -659,7 +660,7 @@ with tab2:
         # -------------------------------------------------
         # Subabas
         # -------------------------------------------------
-        sub_avah, sub_ciclos = st.tabs(["📊 Vertical & Horizontal", "⏱️ PMR • PME • PMP"])
+        sub_avah, sub_ciclos, sub_tes = st.tabs(["📊 Vertical & Horizontal", "⏱️ PMR • PME • PMP", "🏦 Tesouraria"])
 
         # =================================================
         # SUBABA 1 — Vertical & Horizontal
@@ -679,7 +680,7 @@ with tab2:
                 # Base da vertical: Ativo Circulante + Ativo Não Circulante (proxy do Ativo Total na sua estrutura)
                 # Como você não tem "Ativo Total", usamos "Ativo Circulante" + "Ativo Não Circulante"
                 base_conta = None
-                base_nome = "Ativo Total (proxy = AC + ANC)"
+                base_nome = "Ativo Total (AC + ANC)"
 
             # Normaliza colunas numéricas
             for a in anos:
@@ -722,7 +723,7 @@ with tab2:
                 st.dataframe(
                     df_vert.style.format({a: "{:,.2f}%" for a in anos_ok}),
                     use_container_width=True,
-                    height=min(900, 40 + 32 * (len(df_vert) + 2))
+                    height=min(1000, 40 + 32 * (len(df_vert) + 2))
                 )
 
             with c2:
@@ -730,7 +731,7 @@ with tab2:
                 st.dataframe(
                     df_hpct.style.format({a: "{:,.2f}%" for a in anos_ok}),
                     use_container_width=True,
-                    height=min(900, 40 + 32 * (len(df_hpct) + 2))
+                    height=min(1000, 40 + 32 * (len(df_hpct) + 2))
                 )
 
 
@@ -790,3 +791,126 @@ with tab2:
             k3.metric("PMP (dias)", f"{pmp_u:.0f}" if pd.notna(pmp_u) else "n/a")
             k4.metric("Ciclo Operacional", f"{cop_u:.0f}" if pd.notna(cop_u) else "n/a")
             k5.metric("Ciclo Financeiro", f"{cfi_u:.0f}" if pd.notna(cfi_u) else "n/a")
+
+        with sub_tes:
+            st.markdown("### 🏦 Tesouraria — IOG, CPL e Saldo de Tesouraria")
+
+            dre_df = st.session_state.get("dre_df")
+            bp_df  = st.session_state.get("balanco_df")
+
+            if dre_df is None or bp_df is None or dre_df.empty or bp_df.empty:
+                st.warning("Preencha DRE e Balanço na aba 'Banco de Dados' para habilitar Tesouraria.")
+            else:
+                # Helpers compatíveis com símbolos em Conta
+                def _conta_col(df):
+                    return df["Conta"].astype(str).map(conta_limpa)
+
+                def get_serie(df, conta):
+                    s = _conta_col(df)
+                    mask = (s == conta)
+                    if not mask.any():
+                        return pd.Series({a: 0.0 for a in anos})
+                    out = df.loc[mask, anos].iloc[0]
+                    return pd.to_numeric(out, errors="coerce").fillna(0.0)
+
+                # Séries do BP
+                cr   = get_serie(bp_df, "Contas a Receber")
+                est  = get_serie(bp_df, "Estoques")
+                adi  = get_serie(bp_df, "Adiantamentos")
+
+                forn = get_serie(bp_df, "Fornecedores")
+                sal  = get_serie(bp_df, "Salários")
+                imp  = get_serie(bp_df, "Impostos e Encargos Sociais")
+
+                anc  = get_serie(bp_df, "Ativo Não Circulante")
+                pnc  = get_serie(bp_df, "Passivo Não Circulante")
+                pl   = get_serie(bp_df, "Patrimônio Líquido")
+
+                # Série da DRE (Vendas)
+                vendas = get_serie(dre_df, "Receita Líquida")
+
+                # Cálculos (como você definiu)
+                acc = cr + est + adi
+                pcc = forn + sal + imp
+                iog = acc - pcc
+
+                cpl = (pnc + pl) - anc
+                st_saldo = iog - cpl  # conforme seu padrão
+
+                # Monta tabela (linhas variáveis, colunas anos)
+                df_tes = pd.DataFrame({
+                    "Vendas (Receita Líquida)": vendas,
+                    "ACC (CR + Estoques + Adiant.)": acc,
+                    "PCC (Forn + Sal + Imp)": pcc,
+                    "IOG (ACC - PCC)": iog,
+                    "CPL ((PNC + PL) - ANC)": cpl,
+                    "Saldo de Tesouraria (IOG - CPL)": st_saldo,
+                }).T
+                df_tes.columns = anos
+
+                st.dataframe(
+                    df_tes.style.format({a: "R$ {:,.0f}" for a in anos}),
+                    use_container_width=True,
+                    height=min(520, 40 + 32 * (len(df_tes) + 2))
+                )
+
+                st.divider()
+
+                # Gráfico (evolução)
+                st.markdown("#### Evolução — Vendas, IOG, CPL e Saldo de Tesouraria")
+
+                normalizar = st.checkbox("Normalizar (base 100 no primeiro ano preenchido)", value=False)
+
+                # Detecta anos preenchidos (para não plotar tudo zero)
+                anos_plot = []
+                for a in anos:
+                    col = df_tes[a].astype(float)
+                    if float(np.nansum(np.abs(col.values))) != 0.0:
+                        anos_plot.append(a)
+                if not anos_plot:
+                    anos_plot = anos[:]
+
+                # Prepara séries para plot
+                def _norm(s: pd.Series) -> pd.Series:
+                    if not normalizar:
+                        return s
+                    # base = primeiro ano com valor != 0
+                    base = None
+                    for a in anos_plot:
+                        v = float(s[a])
+                        if v != 0.0:
+                            base = v
+                            break
+                    if base in (None, 0.0):
+                        return s * 0.0
+                    return (s / base) * 100.0
+
+                x = anos_plot
+                vendas_p = _norm(vendas)
+                iog_p    = _norm(iog)
+                cpl_p    = _norm(cpl)
+                st_p     = _norm(st_saldo)
+
+                fig = go.Figure()
+                fig.add_trace(go.Scatter(x=x, y=[float(vendas_p[a]) for a in x], mode="lines+markers", name="Vendas"))
+                fig.add_trace(go.Scatter(x=x, y=[float(iog_p[a]) for a in x],    mode="lines+markers", name="IOG"))
+                fig.add_trace(go.Scatter(x=x, y=[float(cpl_p[a]) for a in x],    mode="lines+markers", name="CPL"))
+                fig.add_trace(go.Scatter(x=x, y=[float(st_p[a]) for a in x],     mode="lines+markers", name="Saldo de Tesouraria"))
+
+                fig.update_layout(
+                    height=520,
+                    xaxis_title="Período",
+                    yaxis_title="Base 100" if normalizar else "R$",
+                    legend_title="Séries",
+                    margin=dict(l=10, r=10, t=10, b=10)
+                )
+
+                st.plotly_chart(fig, use_container_width=True)
+
+                # Cards do último ano
+                ultimo = anos_plot[-1]
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("IOG", f"R$ {float(iog[ultimo]):,.0f}".replace(",", "X").replace(".", ",").replace("X", "."))
+                c2.metric("CPL", f"R$ {float(cpl[ultimo]):,.0f}".replace(",", "X").replace(".", ",").replace("X", "."))
+                c3.metric("Saldo Tesouraria", f"R$ {float(st_saldo[ultimo]):,.0f}".replace(",", "X").replace(".", ",").replace("X", "."))
+                c4.metric("Vendas", f"R$ {float(vendas[ultimo]):,.0f}".replace(",", "X").replace(".", ",").replace("X", "."))
