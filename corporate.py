@@ -1137,242 +1137,228 @@ with tab2:
         ])
 
         # =================================================
-        # SUBABA 0 — Indicadores + Gráfico + CAGR
+        # SUBABA 0 — Indicadores + Gráfico + CAGR (LIMPA)
         # =================================================
         with sub_indic:
             st.markdown("## 📈 Evolução de Indicadores")
-            st.caption("Selecione indicadores para ver a evolução por período. Tabela: linhas = indicadores, colunas = anos.")
-
-            # -----------------------------
-            # Helpers numéricos
-            # -----------------------------
-            def safe_div_scalar(n, d):
-                try:
-                    n = float(n)
-                    d = float(d)
-                    if d == 0:
-                        return np.nan
-                    return n / d
-                except Exception:
-                    return np.nan
-
-            def to_float_series(s):
-                # garante float por ano
-                out = {}
-                for a in anos_ok:
-                    try:
-                        out[a] = float(s[a])
-                    except Exception:
-                        out[a] = 0.0
-                return pd.Series(out)
+            st.caption("Selecione indicadores para ver a evolução por período.")
 
             # -----------------------------
             # Séries base (DRE / BP)
             # -----------------------------
-            receita = get_serie(dre_df, "Receita Líquida")
-            cmv     = get_serie(dre_df, "CMV, CPV ou CSP").abs()  # usa módulo
-            ebit    = get_serie(dre_df, "Lucro Operacional - EBIT")
-            ebitda  = get_serie(dre_df, "EBITDA")
-            lucro   = get_serie(dre_df, "Lucro Líquido")
+            receita  = get_serie(dre_df, "Receita Líquida")
+            cmv      = get_serie(dre_df, "CMV, CPV ou CSP").abs()           # usa módulo
+            ebit     = get_serie(dre_df, "Lucro Operacional - EBIT")
+            ebitda   = get_serie(dre_df, "EBITDA")
+            lucroliq = get_serie(dre_df, "Lucro Líquido")
+            imposto  = get_serie(dre_df, "Imposto de Renda").abs()          # módulo
+            da       = get_serie(dre_df, "Depreciação & Amortização").abs() # módulo
 
-            caixa   = get_serie(bp_df, "Caixa e Similares")
-            cr      = get_serie(bp_df, "Contas a Receber")
-            est     = get_serie(bp_df, "Estoques")
-            adi     = get_serie(bp_df, "Adiantamentos")
+            caixa = get_serie(bp_df, "Caixa e Similares")
+            cr    = get_serie(bp_df, "Contas a Receber")
+            est   = get_serie(bp_df, "Estoques")
+            adi   = get_serie(bp_df, "Adiantamentos")
 
-            forn    = get_serie(bp_df, "Fornecedores")
-            sal     = get_serie(bp_df, "Salários")
-            imp     = get_serie(bp_df, "Impostos e Encargos Sociais")
+            ac    = get_serie(bp_df, "Ativo Circulante")
+            anc   = get_serie(bp_df, "Ativo Não Circulante")
 
-            anc     = get_serie(bp_df, "Ativo Não Circulante")
-            ac      = get_serie(bp_df, "Ativo Circulante")
-            pnc     = get_serie(bp_df, "Passivo Não Circulante")
-            pc      = get_serie(bp_df, "Passivo Circulante")
-            pl      = get_serie(bp_df, "Patrimônio Líquido")
+            forn  = get_serie(bp_df, "Fornecedores")
+            sal   = get_serie(bp_df, "Salários")
+            impcp = get_serie(bp_df, "Impostos e Encargos Sociais")
 
-            div_cp  = get_serie(bp_df, "Empréstimos e Financiamentos (CP)")
-            div_lp  = get_serie(bp_df, "Empréstimos e Financiamentos (LP)")
-            div_bruta = div_cp + div_lp
-            div_liq   = div_bruta - caixa
+            pc    = get_serie(bp_df, "Passivo Circulante")
+            pnc   = get_serie(bp_df, "Passivo Não Circulante")
+            pl    = get_serie(bp_df, "Patrimônio Líquido")
+
+            # Dívida (proxy)
+            div_cp = get_serie(bp_df, "Empréstimos e Financiamentos (CP)")
+            div_lp = get_serie(bp_df, "Empréstimos e Financiamentos (LP)")
+            div_total = div_cp + div_lp
+            div_liq   = div_total - caixa
 
             # -----------------------------
             # Tesouraria (Fleuriet)
             # CPL = (PNC + PL) - ANC
             # IOG = ACC - PCC
             # ACC = CR + Estoques + Adiantamentos
-            # PCC = Fornecedores + Salários + Impostos e Encargos Sociais
+            # PCC = Forn + Sal + Impostos Encargos
             # -----------------------------
             acc = cr + est + adi
-            pcc = forn + sal + imp
+            pcc = forn + sal + impcp
             iog = acc - pcc
             cpl = (pnc + pl) - anc
             saldo_tes = iog - cpl
 
             # -----------------------------
-            # Proxy simples de FCO (se você já tem um cálculo melhor, substitua aqui)
-            # FCO proxy = Lucro Líquido + D&A + variações de capital de giro
-            # Você ainda não tem D&A separado em BP, mas tem na DRE: Depreciação & Amortização
-            # (No seu modelo, D&A costuma estar negativa; usamos módulo)
+            # FCO (proxy) — método indireto simples
+            # FCO = Lucro Líq + D&A - ΔNWC   (NWC = ACC - PCC)
             # -----------------------------
-            da = get_serie(dre_df, "Depreciação & Amortização").abs()
-
-            # var capital de giro operacional (bem simples):
-            # Δ(Contas a Receber + Estoques + Adiantamentos) - Δ(Fornecedores + Salários + Impostos Enc. Sociais)
-            def delta_ano(serie, a_now, a_prev):
-                return float(serie[a_now]) - float(serie[a_prev])
-
+            nwc = acc - pcc
             fco = pd.Series({a: np.nan for a in anos_ok})
-            for i, a in enumerate(anos_ok):
-                if i == 0:
+            for j, a in enumerate(anos_ok):
+                if j == 0:
                     fco[a] = np.nan
                 else:
-                    ap = anos_ok[i-1]
-                    delta_acc = delta_ano(acc, a, ap)
-                    delta_pcc = delta_ano(pcc, a, ap)
-                    var_cg = delta_acc - delta_pcc
-                    # lucro + DA - var_cg (se var_cg aumenta, consome caixa)
-                    fco[a] = float(lucro[a]) + float(da[a]) - float(var_cg)
+                    a_prev = anos_ok[j - 1]
+                    delta_nwc = float(nwc[a]) - float(nwc[a_prev])
+                    fco[a] = float(lucroliq[a] + da[a] - delta_nwc)
 
             # -----------------------------
-            # ROIC (aproximação)
-            # NOPAT ~ EBIT * (1 - IR)
-            # Capital Investido ~ IOG + ANC  (proxy simples, consistente com o seu modelo)
-            # IR como input local (por enquanto)
+            # ROIC (proxy coerente)
+            # NOPAT = EBIT * (1 - alíquota)
+            # Capital Investido (proxy) = IOG + ANC
             # -----------------------------
-            ir_eff = st.number_input("Alíquota efetiva para ROIC (IR/CSLL) %", value=34.0, step=1.0) / 100
+            ir_eff = st.number_input("Alíquota efetiva para ROIC (IR/CSLL) %", value=34.0, step=1.0) / 100.0
+
+            def _safe_div_scalar(n, d):
+                try:
+                    n = float(n); d = float(d)
+                    return np.nan if d == 0 else (n / d)
+                except Exception:
+                    return np.nan
 
             roic = pd.Series({a: np.nan for a in anos_ok})
             for a in anos_ok:
                 nopat = float(ebit[a]) * (1 - ir_eff)
                 cap_inv = float(iog[a]) + float(anc[a])
-                roic[a] = safe_div_scalar(nopat, cap_inv) * 100.0
+                roic[a] = _safe_div_scalar(nopat, cap_inv) * 100.0
 
-            # -----------------------------
-            # Monta TODOS os indicadores (linhas)
-            # -----------------------------
-            indicadores = {}
+            # ----------------------------
+            # Indicadores (BÁSICOS + AVANÇADOS)
+            # ----------------------------
+            indic = {}
 
-            # Básicos
-            indicadores["Receita Líquida (R$)"] = to_float_series(receita)
-            indicadores["EBITDA (R$)"]          = to_float_series(ebitda)
-            indicadores["EBIT (R$)"]            = to_float_series(ebit)
-            indicadores["Lucro Líquido (R$)"]   = to_float_series(lucro)
-            indicadores["Caixa (R$)"]           = to_float_series(caixa)
-            indicadores["Dívida Bruta (R$)"]    = to_float_series(div_bruta)
-            indicadores["Dívida Líquida (R$)"]  = to_float_series(div_liq)
+            # Margens
+            indic["Margem Bruta (%)"]   = safe_div((receita - cmv), receita) * 100.0
+            indic["Margem EBIT (%)"]    = safe_div(ebit, receita) * 100.0
+            indic["Margem EBITDA (%)"]  = safe_div(ebitda, receita) * 100.0
+            indic["Margem Líquida (%)"] = safe_div(lucroliq, receita) * 100.0
 
-            # Estruturais / Tesouraria
-            indicadores["ACC (R$)"]                 = to_float_series(acc)
-            indicadores["PCC (R$)"]                 = to_float_series(pcc)
-            indicadores["IOG (R$)"]                 = to_float_series(iog)
-            indicadores["CPL (R$)"]                 = to_float_series(cpl)
-            indicadores["Saldo de Tesouraria (R$)"] = to_float_series(saldo_tes)
+            # Endividamento
+            indic["Dívida Total / PL (x)"]       = safe_div(div_total, pl)
+            indic["Dívida Líquida / PL (x)"]     = safe_div(div_liq, pl)
+            indic["Dívida Líquida / EBITDA (x)"] = safe_div(div_liq, ebitda)
 
-            # Avançados (múltiplos)
-            # (x) = "vezes"
-            indicadores["Dívida Líquida / EBITDA (x)"] = pd.Series({a: safe_div_scalar(div_liq[a], ebitda[a]) for a in anos_ok})
-            indicadores["Dívida Líquida / FCO (x)"]    = pd.Series({a: safe_div_scalar(div_liq[a], fco[a]) for a in anos_ok})
-            indicadores["Receita Líquida / FCO (x)"]   = pd.Series({a: safe_div_scalar(receita[a], fco[a]) for a in anos_ok})
-            indicadores["ROIC (%)"]                    = to_float_series(roic)
+            # Liquidez
+            indic["Liquidez Corrente (AC/PC)"]      = safe_div(ac, pc)
+            indic["Liquidez Seca ((AC-Est)/PC)"]    = safe_div((ac - est), pc)
+            indic["Caixa / Dívida de CP (%)"]       = safe_div(caixa, div_cp) * 100.0
 
-            # (se quiser incluir mais agora)
-            indicadores["Dívida Bruta / PL (x)"]       = pd.Series({a: safe_div_scalar(div_bruta[a], pl[a]) for a in anos_ok})
-            indicadores["Dívida Líquida / PL (x)"]     = pd.Series({a: safe_div_scalar(div_liq[a], pl[a]) for a in anos_ok})
+            # Eficiência (múltiplos)
+            indic["Contas Receber / Receita (%)"]        = safe_div(cr, receita) *100.0
+            indic["Estoques / CMV (%)"]      = safe_div(est, cmv) *100.0
+            indic["Fornecedores / CMV (%)"]  = safe_div(forn, cmv) *100.0
 
-            # -----------------------------
-            # DataFrame final (linhas = indicadores, colunas = anos)
-            # -----------------------------
-            df_ind = pd.DataFrame(indicadores).T
-            df_ind = df_ind[anos_ok]  # garante ordem
+            # Avançados pedidos
+            indic["FCO / Dívida Líquida (%)"]    = safe_div(fco, div_liq) *100.0
+            indic["FCO / Receita Líquida (%)"]   = safe_div(fco, receita) *100.0
+            indic["ROIC (%)"]                   = roic
+            indic["ROE (%)"]                   = safe_div(lucroliq, pl) *100.0
 
-            # Formatação: define quais são % e quais são (x)
-            fmt = {}
-            for a in anos_ok:
-                fmt[a] = "R$ {:,.0f}"  # default
+            # ----------------------------
+            # Tabela (linhas = indicadores, colunas = anos_ok)
+            # ----------------------------
+            df_ind = pd.DataFrame({k: v for k, v in indic.items()}).T
+            df_ind = df_ind[anos_ok]
+            df_ind.index.name = "Indicador"
 
-            def is_percent(name): return "(%)" in name or name.endswith("%)") or name.endswith("(%)") or name == "ROIC (%)"
-            def is_multiple(name): return "(x)" in name
+            st.markdown("#### Tabela de Indicadores")
 
-            # Styler com formatação por linha (aplica por máscara)
-            def style_format_rowwise(df):
-                sty = df.style
-                # Vamos formatar depois com applymap? Melhor: criar um df_str? Mantemos simples e eficiente:
-                return sty
+            # ----------------------------
+            # Formatação compatível (sem axis no Styler)
+            # ----------------------------
+            df_ind_fmt = df_ind.copy()
 
-            # Mostrar tabela com formatação condicional simples:
-            st.markdown("### 📌 Tabela de Indicadores (Anos nas colunas)")
-            df_show = df_ind.copy()
+            def _fmt_x(v):
+                if v is None or (isinstance(v, float) and np.isnan(v)):
+                    return ""
+                return f"{float(v):.2f}x"
 
-            # cria tabela de strings formatadas por linha
-            df_str = df_show.copy().astype(object)
-            for idx in df_str.index:
-                for a in anos_ok:
-                    v = df_show.loc[idx, a]
-                    if pd.isna(v):
-                        df_str.loc[idx, a] = ""
-                    else:
-                        if is_percent(idx):
-                            df_str.loc[idx, a] = f"{float(v):,.2f}%"
-                        elif is_multiple(idx):
-                            df_str.loc[idx, a] = f"{float(v):,.2f}x"
-                        else:
-                            df_str.loc[idx, a] = f"R$ {float(v):,.0f}"
+            def _fmt_pct(v):
+                if v is None or (isinstance(v, float) and np.isnan(v)):
+                    return ""
+                return f"{float(v):.2f}%"
+
+            def _fmt_rs(v):
+                if v is None or (isinstance(v, float) and np.isnan(v)):
+                    return ""
+                return f"R$ {float(v):,.0f}"
+
+            def _fmt_num(v):
+                if v is None or (isinstance(v, float) and np.isnan(v)):
+                    return ""
+                return f"{float(v):.2f}"
+
+            # Aplica formatação por linha (indicador)
+            for idx in df_ind_fmt.index:
+                nome = str(idx)
+                if "(x)" in nome:
+                    df_ind_fmt.loc[idx, :] = df_ind_fmt.loc[idx, :].apply(_fmt_x)
+                elif "(%)" in nome or "%" in nome:
+                    df_ind_fmt.loc[idx, :] = df_ind_fmt.loc[idx, :].apply(_fmt_pct)
+                elif "(R$)" in nome or nome.endswith("(R$)"):
+                    df_ind_fmt.loc[idx, :] = df_ind_fmt.loc[idx, :].apply(_fmt_rs)
+                else:
+                    df_ind_fmt.loc[idx, :] = df_ind_fmt.loc[idx, :].apply(_fmt_num)
 
             st.dataframe(
-                df_str,
+                df_ind_fmt,
                 use_container_width=True,
-                height=min(900, 40 + 32 * (len(df_str) + 2))
+                height=min(780, 40 + 32 * (len(df_ind_fmt) + 2))
             )
+
 
             st.divider()
 
-            # -----------------------------
-            # Gráfico: seleção livre de indicadores
-            # -----------------------------
-            st.markdown("### 📉 Gráfico — evolução dos indicadores")
+            # ----------------------------
+            # Gráfico selecionável (mantém multi-seleção)
+            # ----------------------------
+            st.markdown("#### Gráfico — evolução do indicador")
 
             opcoes = list(df_ind.index)
-            sel = st.multiselect(
-                "Escolha os indicadores para plotar",
+
+            indicadores_sel = st.multiselect(
+                "Selecione os indicadores para plotar",
                 options=opcoes,
-                default=["Receita Líquida (R$)", "EBITDA (R$)", "Dívida Líquida (R$)"] if all(x in opcoes for x in ["Receita Líquida (R$)", "EBITDA (R$)", "Dívida Líquida (R$)"]) else opcoes[:3]
+                default=opcoes[:3] if len(opcoes) >= 3 else opcoes
             )
 
-            normalizar = st.checkbox("Normalizar (base 100 no primeiro ano com valor)", value=False)
-
-            def norm_series(s: pd.Series) -> pd.Series:
-                if not normalizar:
-                    return s
-                base = None
-                for a in anos_ok:
-                    v = s[a]
-                    if pd.notna(v) and float(v) != 0.0:
-                        base = float(v)
-                        break
-                if base in (None, 0.0):
-                    return s * 0.0
-                return (s / base) * 100.0
-
             fig = go.Figure()
-            for name in sel:
-                s = df_ind.loc[name, anos_ok].astype(float)
-                s_plot = norm_series(s)
-                fig.add_trace(go.Scatter(
-                    x=anos_ok,
-                    y=[float(s_plot[a]) if pd.notna(s_plot[a]) else None for a in anos_ok],
-                    mode="lines+markers",
-                    name=name
-                ))
+            for ind in indicadores_sel:
+                y = [float(df_ind.loc[ind, a]) if pd.notna(df_ind.loc[ind, a]) else np.nan for a in anos_ok]
+                fig.add_trace(go.Scatter(x=anos_ok, y=y, mode="lines+markers", name=str(ind)))
 
             fig.update_layout(
                 height=520,
                 xaxis_title="Período",
-                yaxis_title="Base 100" if normalizar else "Valor",
+                yaxis_title="Valor",
                 legend_title="Indicadores",
                 margin=dict(l=10, r=10, t=10, b=10)
             )
 
             st.plotly_chart(fig, use_container_width=True)
+
+            # ----------------------------
+            # Cards de CAGR (pontos importantes)
+            # ----------------------------
+            st.divider()
+            st.markdown("#### CAGR — pontos-chave (do primeiro ao último ano preenchido)")
+
+            cagr_series = {
+                "Faturamento (Receita)": receita,
+                "EBITDA": ebitda,
+                "Lucro Líquido": lucroliq,
+                "Caixa": caixa,
+                "Dívida Total": div_total,
+                "Dívida Líquida": div_liq,
+            }
+
+            cards = st.columns(6)
+            for i, (nome, s) in enumerate(cagr_series.items()):
+                v0, v1, nint = first_last_and_nint(s)
+                g = cagr(v0, v1, nint)
+                txt = "n/a" if g is None else f"{g*100:,.1f}%"
+                cards[i].metric(nome, txt, help="CAGR do primeiro ao último período preenchido (valores > 0).")
 
         # =================================================
         # SUBABA 1 — Vertical & Horizontal
