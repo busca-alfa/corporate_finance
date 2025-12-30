@@ -2,6 +2,137 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
+from pathlib import Path
+import json
+import re
+import io
+import zipfile
+from datetime import datetime
+
+DATA_DIR = Path("data_empresas")
+DATA_DIR.mkdir(exist_ok=True)
+
+def slugify(nome: str) -> str:
+    s = (nome or "").strip().lower()
+    s = re.sub(r"[^a-z0-9]+", "_", s)
+    s = re.sub(r"_+", "_", s).strip("_")
+    return s or "empresa"
+
+def empresa_path(empresa_id: str) -> Path:
+    return DATA_DIR / f"{empresa_id}.json"
+
+def df_to_records(df: pd.DataFrame) -> list:
+    if df is None:
+        return []
+    return df.to_dict(orient="records")
+
+def records_to_df(records: list) -> pd.DataFrame:
+    if not records:
+        return pd.DataFrame()
+    return pd.DataFrame.from_records(records)
+
+def salvar_empresa(empresa_id: str, payload: dict) -> None:
+    path = empresa_path(empresa_id)
+    with path.open("w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+
+def carregar_empresa(empresa_id: str) -> dict | None:
+    path = empresa_path(empresa_id)
+    if not path.exists():
+        return None
+    with path.open("r", encoding="utf-8") as f:
+        return json.load(f)
+
+def listar_empresas() -> list[tuple[str, str]]:
+    out = []
+    for p in sorted(DATA_DIR.glob("*.json")):
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+            out.append((p.stem, data.get("empresa_nome", p.stem)))
+        except Exception:
+            out.append((p.stem, p.stem))
+    return out
+
+def restaurar_para_session_state(data: dict):
+    """Restaura DFs no session_state a partir do JSON."""
+    if not data:
+        return
+    st.session_state["empresa_id"] = data.get("empresa_id", "")
+    st.session_state["empresa_nome"] = data.get("empresa_nome", "")
+
+    st.session_state["dre_raw"] = records_to_df(data.get("dre_raw", []))
+    ov_dre = records_to_df(data.get("dre_override", []))
+    st.session_state["dre_override"] = ov_dre.set_index("Conta") if not ov_dre.empty and "Conta" in ov_dre.columns else st.session_state.get("dre_override")
+
+    st.session_state["bp_raw"] = records_to_df(data.get("bp_raw", []))
+    ov_bp = records_to_df(data.get("bp_override", []))
+    st.session_state["bp_override"] = ov_bp.set_index("Conta") if not ov_bp.empty and "Conta" in ov_bp.columns else st.session_state.get("bp_override")
+
+def coletar_payload_do_session_state(empresa_id: str, empresa_nome: str) -> dict:
+    """Monta o JSON persistível com base no que está no app."""
+    dre_override_df = st.session_state.get("dre_override")
+    bp_override_df = st.session_state.get("bp_override")
+
+    payload = {
+        "empresa_id": empresa_id,
+        "empresa_nome": empresa_nome,
+        "salvo_em": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "dre_raw": df_to_records(st.session_state.get("dre_raw")),
+        "dre_override": df_to_records(dre_override_df.reset_index()) if isinstance(dre_override_df, pd.DataFrame) else [],
+        "bp_raw": df_to_records(st.session_state.get("bp_raw")),
+        "bp_override": df_to_records(bp_override_df.reset_index()) if isinstance(bp_override_df, pd.DataFrame) else [],
+    }
+    return payload
+
+def empresa_existe(empresa_id: str) -> bool:
+    return empresa_path(empresa_id).exists()
+
+def gerar_excel_bytes(dfs: dict[str, pd.DataFrame]) -> bytes:
+    """
+    Gera um XLSX em memória com várias abas.
+    Requer openpyxl instalado.
+    """
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        for nome, df in dfs.items():
+            if df is None:
+                continue
+            if isinstance(df, pd.DataFrame) and not df.empty:
+                df.to_excel(writer, sheet_name=nome[:31], index=True)
+            else:
+                pd.DataFrame().to_excel(writer, sheet_name=nome[:31], index=False)
+    output.seek(0)
+    return output.read()
+
+def gerar_zip_empresa(empresa_id: str, data: dict) -> bytes:
+    """ZIP contendo JSON e um XLSX com as tabelas principais."""
+    zip_buf = io.BytesIO()
+    with zipfile.ZipFile(zip_buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        # JSON
+        zf.writestr(f"{empresa_id}.json", json.dumps(data, ensure_ascii=False, indent=2))
+
+        # Excel
+        dre_raw = records_to_df(data.get("dre_raw", []))
+        dre_override = records_to_df(data.get("dre_override", []))
+        bp_raw = records_to_df(data.get("bp_raw", []))
+        bp_override = records_to_df(data.get("bp_override", []))
+
+        # Ajusta index (se vier com coluna Conta no override)
+        if "Conta" in dre_override.columns:
+            dre_override = dre_override.set_index("Conta")
+        if "Conta" in bp_override.columns:
+            bp_override = bp_override.set_index("Conta")
+
+        xlsx = gerar_excel_bytes({
+            "DRE_raw": dre_raw.set_index("Conta") if "Conta" in dre_raw.columns else dre_raw,
+            "DRE_override": dre_override,
+            "BP_raw": bp_raw.set_index("Conta") if "Conta" in bp_raw.columns else bp_raw,
+            "BP_override": bp_override,
+        })
+        zf.writestr(f"{empresa_id}.xlsx", xlsx)
+
+    zip_buf.seek(0)
+    return zip_buf.read()
 
 st.set_page_config(
     page_title="Análise Econômico-Financeira",
@@ -11,6 +142,218 @@ st.set_page_config(
 st.title("📊 Análise Econômico-Financeira da Empresa")
 st.caption("Preencha os dados do mais antigo para o mais recente")
 
+st.sidebar.markdown("## 🗂️ Gestão de Empresas")
+
+empresas = listar_empresas()
+mapa_nome = {eid: nome for eid, nome in empresas}
+ids = [eid for eid, _ in empresas]
+
+# Seleção atual (persistida)
+eid_atual = st.session_state.get("empresa_id", "")
+nome_atual = st.session_state.get("empresa_nome", "")
+
+# Se não tem empresa ainda, sugere nova
+if not ids:
+    st.sidebar.info("Nenhuma empresa cadastrada ainda. Crie uma nova abaixo.")
+
+opcoes = ["— Nova empresa —"] + [f"{mapa_nome[eid]}  ({eid})" for eid in ids]
+sel = st.sidebar.selectbox("Empresa", opcoes, index=0 if not eid_atual else (1 + ids.index(eid_atual) if eid_atual in ids else 0))
+
+# Campos de Nova empresa
+novo_nome = ""
+novo_id = ""
+if sel == "— Nova empresa —":
+    novo_nome = st.sidebar.text_input("Nome da empresa", placeholder="Ex.: ACME S.A.")
+    novo_id = slugify(novo_nome) if novo_nome.strip() else ""
+else:
+    novo_id = sel.split("(")[-1].replace(")", "").strip()
+    novo_nome = mapa_nome.get(novo_id, novo_id)
+
+st.sidebar.caption("Dica: salve frequentemente. Você poderá duplicar e renomear depois.")
+
+c1, c2 = st.sidebar.columns(2)
+btn_carregar = c1.button("📥 Carregar", use_container_width=True)
+btn_salvar = c2.button("💾 Salvar", use_container_width=True)
+
+# Ações principais
+if btn_carregar:
+    if not novo_id:
+        st.sidebar.warning("Informe/Selecione uma empresa.")
+    else:
+        data = carregar_empresa(novo_id)
+        if not data:
+            st.sidebar.info("Empresa ainda sem dados salvos. Preencha e clique em Salvar.")
+            st.session_state["empresa_id"] = novo_id
+            st.session_state["empresa_nome"] = novo_nome
+        else:
+            restaurar_para_session_state(data)
+            st.sidebar.success(f"Carregado: {novo_nome} ({novo_id})")
+            st.rerun()
+
+if btn_salvar:
+    if not novo_id:
+        st.sidebar.warning("Informe/Selecione uma empresa antes de salvar.")
+    else:
+        st.session_state["empresa_id"] = novo_id
+        st.session_state["empresa_nome"] = novo_nome
+        payload = coletar_payload_do_session_state(novo_id, novo_nome)
+        salvar_empresa(novo_id, payload)
+        st.sidebar.success(f"Salvo: {novo_nome} ({novo_id})")
+        st.rerun()
+
+st.sidebar.divider()
+
+# ====== Duplicar ======
+st.sidebar.markdown("### 📄 Duplicar")
+dup_nome = st.sidebar.text_input("Novo nome (duplicação)", placeholder="Ex.: ACME S.A. (cenário 2)")
+btn_duplicar = st.sidebar.button("Duplicar empresa", use_container_width=True)
+
+if btn_duplicar:
+    if not novo_id or not empresa_existe(novo_id):
+        st.sidebar.warning("Selecione uma empresa existente para duplicar.")
+    elif not dup_nome.strip():
+        st.sidebar.warning("Informe o novo nome.")
+    else:
+        data = carregar_empresa(novo_id)
+        new_id = slugify(dup_nome)
+        # evitar overwrite acidental
+        if empresa_existe(new_id):
+            st.sidebar.warning("Já existe uma empresa com esse ID. Ajuste o nome.")
+        else:
+            data["empresa_id"] = new_id
+            data["empresa_nome"] = dup_nome.strip()
+            salvar_empresa(new_id, data)
+            st.sidebar.success(f"Duplicado para: {dup_nome} ({new_id})")
+            st.rerun()
+
+st.sidebar.divider()
+
+# ====== Renomear ======
+st.sidebar.markdown("### ✏️ Renomear")
+rename_nome = st.sidebar.text_input("Novo nome (renomear)", placeholder="Ex.: ACME S.A. — Consolidado")
+btn_renomear = st.sidebar.button("Renomear (mantém ID)", use_container_width=True)
+
+if btn_renomear:
+    if not novo_id or not empresa_existe(novo_id):
+        st.sidebar.warning("Selecione uma empresa existente.")
+    elif not rename_nome.strip():
+        st.sidebar.warning("Informe o novo nome.")
+    else:
+        data = carregar_empresa(novo_id)
+        data["empresa_nome"] = rename_nome.strip()
+        salvar_empresa(novo_id, data)
+        # se for a empresa atual, atualiza session_state
+        if st.session_state.get("empresa_id") == novo_id:
+            st.session_state["empresa_nome"] = rename_nome.strip()
+        st.sidebar.success("Renomeado com sucesso.")
+        st.rerun()
+
+st.sidebar.divider()
+
+# ====== Exportar ======
+st.sidebar.markdown("### 📦 Exportar")
+btn_exportar = st.sidebar.button("Gerar ZIP (JSON + Excel)", use_container_width=True)
+
+if btn_exportar:
+    if not novo_id or not empresa_existe(novo_id):
+        st.sidebar.warning("Selecione uma empresa existente.")
+    else:
+        data = carregar_empresa(novo_id)
+        zip_bytes = gerar_zip_empresa(novo_id, data)
+        st.sidebar.download_button(
+            label="⬇️ Baixar ZIP",
+            data=zip_bytes,
+            file_name=f"{novo_id}_export.zip",
+            mime="application/zip",
+            use_container_width=True
+        )
+
+st.sidebar.divider()
+
+# ====== Deletar ======
+st.sidebar.markdown("### 🗑️ Deletar")
+conf_del = st.sidebar.checkbox("Confirmo que quero deletar esta empresa (irreversível)")
+btn_deletar = st.sidebar.button("Deletar empresa", use_container_width=True)
+
+if btn_deletar:
+    if not novo_id or not empresa_existe(novo_id):
+        st.sidebar.warning("Selecione uma empresa existente.")
+    elif not conf_del:
+        st.sidebar.warning("Marque a confirmação para deletar.")
+    else:
+        empresa_path(novo_id).unlink(missing_ok=True)
+        # se deletou a atual, limpa seleção
+        if st.session_state.get("empresa_id") == novo_id:
+            st.session_state["empresa_id"] = ""
+            st.session_state["empresa_nome"] = ""
+        st.sidebar.success("Empresa deletada.")
+        st.rerun()
+
+
+st.markdown("## 🏢 Empresa (carregar / salvar)")
+
+empresas = listar_empresas()
+opcoes = ["— Nova empresa —"] + [f"{nome}  ({eid})" for eid, nome in empresas]
+
+sel = st.selectbox("Selecione uma empresa", opcoes, index=0)
+
+colA, colB, colC = st.columns([2, 1, 1])
+
+with colA:
+    nome_novo = ""
+    if sel == "— Nova empresa —":
+        nome_novo = st.text_input("Nome da nova empresa", placeholder="Ex.: ACME S.A.")
+with colB:
+    btn_carregar = st.button("📥 Carregar", use_container_width=True)
+with colC:
+    btn_salvar = st.button("💾 Salvar", use_container_width=True)
+
+# Resolve empresa_id atual
+if sel == "— Nova empresa —":
+    empresa_nome = nome_novo.strip()
+    empresa_id = slugify(empresa_nome) if empresa_nome else ""
+else:
+    # extrai id entre parênteses no final
+    empresa_id = sel.split("(")[-1].replace(")", "").strip()
+    empresa_nome = dict(empresas).get(empresa_id, empresa_id)
+
+# Guarda seleção no session_state
+st.session_state["empresa_id"] = empresa_id
+st.session_state["empresa_nome"] = empresa_nome
+
+# CARREGAR
+if btn_carregar:
+    if not empresa_id:
+        st.warning("Informe o nome da empresa para carregar/criar.")
+    else:
+        data = carregar_empresa(empresa_id)
+        if not data:
+            st.info("Empresa ainda não tem dados salvos. Você pode preencher e salvar.")
+        else:
+            # restaura dataframes nos estados do app
+            st.session_state["dre_raw"] = records_to_df(data.get("dre_raw"))
+            st.session_state["dre_override"] = records_to_df(data.get("dre_override")).set_index("Conta") if data.get("dre_override") else st.session_state.get("dre_override")
+            st.session_state["bp_raw"] = records_to_df(data.get("bp_raw"))
+            st.session_state["bp_override"] = records_to_df(data.get("bp_override")).set_index("Conta") if data.get("bp_override") else st.session_state.get("bp_override")
+            st.success(f"Dados carregados: {empresa_nome} ({empresa_id})")
+
+# SALVAR
+if btn_salvar:
+    if not empresa_id:
+        st.warning("Informe o nome da empresa antes de salvar.")
+    else:
+        payload = {
+            "empresa_id": empresa_id,
+            "empresa_nome": empresa_nome,
+            "dre_raw": df_to_records(st.session_state.get("dre_raw")),
+            "dre_override": df_to_records(st.session_state.get("dre_override").reset_index()) if isinstance(st.session_state.get("dre_override"), pd.DataFrame) else [],
+            "bp_raw": df_to_records(st.session_state.get("bp_raw")),
+            "bp_override": df_to_records(st.session_state.get("bp_override").reset_index()) if isinstance(st.session_state.get("bp_override"), pd.DataFrame) else [],
+        }
+        salvar_empresa(empresa_id, payload)
+        st.success(f"Dados salvos: {empresa_nome} ({empresa_id})")
+
+
 # =========================================================
 # CONSTANTES
 # =========================================================
@@ -19,6 +362,98 @@ anos = [f"Ano {i}" for i in range(1, 7)]
 # =========================================================
 # FUNÇÕES AUXILIARES (estilo + formatação segura)
 # =========================================================
+
+def slugify(nome: str) -> str:
+    """Gera um ID seguro a partir do nome da empresa."""
+    s = (nome or "").strip().lower()
+    s = re.sub(r"[^a-z0-9]+", "_", s)
+    s = re.sub(r"_+", "_", s).strip("_")
+    return s or "empresa"
+
+def empresa_path(empresa_id: str) -> Path:
+    return DATA_DIR / f"{empresa_id}.json"
+
+def df_to_records(df: pd.DataFrame) -> list:
+    """Serializa DF para lista de dicts (JSON-friendly)."""
+    if df is None:
+        return []
+    return df.to_dict(orient="records")
+
+def records_to_df(records: list) -> pd.DataFrame:
+    """Desserializa lista de dicts para DF."""
+    if not records:
+        return pd.DataFrame()
+    return pd.DataFrame.from_records(records)
+
+def salvar_empresa(empresa_id: str, payload: dict) -> None:
+    path = empresa_path(empresa_id)
+    with path.open("w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=2)
+
+def carregar_empresa(empresa_id: str) -> dict | None:
+    path = empresa_path(empresa_id)
+    if not path.exists():
+        return None
+    with path.open("r", encoding="utf-8") as f:
+        return json.load(f)
+
+def listar_empresas() -> list[tuple[str, str]]:
+    """
+    Retorna lista de (empresa_id, display_name) lendo os arquivos.
+    display_name é o que foi salvo no JSON.
+    """
+    out = []
+    for p in sorted(DATA_DIR.glob("*.json")):
+        try:
+            data = json.loads(p.read_text(encoding="utf-8"))
+            out.append((p.stem, data.get("empresa_nome", p.stem)))
+        except Exception:
+            out.append((p.stem, p.stem))
+    return out
+
+def parse_num_br(x):
+    """
+    Converte entradas típicas pt-BR em float:
+    - "1.850.000" -> 1850000
+    - "1.850.000,50" -> 1850000.50
+    - "1850000" -> 1850000
+    - "" / None -> 0.0
+    Mantém números já numéricos.
+    """
+    if x is None:
+        return 0.0
+    if isinstance(x, (int, float, np.integer, np.floating)):
+        return float(x)
+
+    s = str(x).strip()
+
+    if s == "":
+        return 0.0
+
+    # remove "R$" e espaços
+    s = s.replace("R$", "").replace(" ", "")
+
+    # padrão brasileiro: '.' milhar e ',' decimal
+    # remove milhares e troca decimal
+    s = s.replace(".", "").replace(",", ".")
+
+    try:
+        return float(s)
+    except Exception:
+        return 0.0
+
+
+def garantir_numerico_df(df, cols):
+    """
+    Garante que as colunas numéricas do DF estejam realmente numéricas
+    (mesmo que o usuário tenha digitado com ponto/virgula).
+    """
+    out = df.copy()
+    for c in cols:
+        out[c] = out[c].apply(parse_num_br).astype(float)
+    return out
+
+
 def formatar_apenas_valores(styler_or_df):
     """
     Recebe um DataFrame ou um Styler e aplica formatação monetária
@@ -32,14 +467,20 @@ def formatar_apenas_valores(styler_or_df):
         return styler_or_df.format(formatos)
     return df.style.format(formatos)
 
-def altura_dataframe(df, max_altura=950, altura_linha=35, altura_header=40, padding=20):
+def altura_dataframe(
+    df,
+    altura_linha=34,
+    altura_header=42,
+    padding=30,
+    max_altura=1400
+):
     """
-    Calcula uma altura para o st.dataframe sem rolagem interna,
-    respeitando um teto (max_altura) para não ficar gigante.
+    Calcula altura suficiente para evitar scroll interno no st.dataframe.
     """
     n = len(df)
-    h = altura_header + (n * altura_linha) + padding
-    return min(h, max_altura)
+    altura = altura_header + n * altura_linha + padding
+    return min(altura, max_altura)
+
 
 def _to_num(df, cols):
     out = df.copy()
@@ -55,6 +496,7 @@ def consolidar_dre_com_override(dre_df: pd.DataFrame, override_df: pd.DataFrame)
     Regras:
     - Sempre NEGATIVOS (mesmo se usuário digitar +): CMV, Despesas, D&A, Imposto
     - Respeitam sinal digitado (+/-): Outras operacionais, Resultado Financeiro, Outros Não Operacionais
+    - Compatível com símbolos na coluna Conta: "(+)", "(-)", "(=)", "(+/-)"
     """
 
     df = dre_df.copy()
@@ -65,7 +507,25 @@ def consolidar_dre_com_override(dre_df: pd.DataFrame, override_df: pd.DataFrame)
 
     df_idx = df.set_index("Conta")
 
-    # 1) Normalizar APENAS contas sempre-negativas
+    # Utilitário: máscara por nome lógico (conta_limpa)
+    def mask_conta(nome_logico: str):
+        return df_idx.index.to_series().map(conta_limpa).eq(nome_logico).values
+
+    # Getter por nome lógico
+    def get(nome_logico: str) -> pd.Series:
+        m = mask_conta(nome_logico)
+        if m.any():
+            return df_idx.loc[m, anos].astype(float).iloc[0]
+        return pd.Series({a: 0.0 for a in anos})
+
+    # Setter por nome lógico
+    def set_row(nome_logico: str, serie: pd.Series):
+        m = mask_conta(nome_logico)
+        if m.any():
+            for a in anos:
+                df_idx.loc[m, a] = float(serie[a])
+
+    # 1) Forçar NEGATIVO nas contas sempre-negativas (AGORA funciona com símbolos)
     sempre_negativas = [
         "CMV, CPV ou CSP",
         "Despesas de Vendas",
@@ -73,64 +533,56 @@ def consolidar_dre_com_override(dre_df: pd.DataFrame, override_df: pd.DataFrame)
         "Depreciação & Amortização",
         "Imposto de Renda",
     ]
-    for conta in sempre_negativas:
-        if conta in df_idx.index:
+    for nome in sempre_negativas:
+        m = mask_conta(nome)
+        if m.any():
             for a in anos:
-                df_idx.loc[conta, a] = -abs(float(df_idx.loc[conta, a]))
+                df_idx.loc[m, a] = -abs(float(df_idx.loc[m, a].iloc[0]))
 
-    # Helper: série por ano (0 se não existir)
-    def get(conta):
-        mask = df_idx.index.map(conta_limpa) == conta
-        if mask.any():
-            return df_idx.loc[mask, anos].astype(float).iloc[0]
-        return pd.Series({a: 0.0 for a in anos})
-
-
-    # 2) Pegar contas (as "livres" ficam exatamente como o usuário digitou)
+    # 2) Cálculos (respeitando regra de sinais)
     receita = get("Receita Líquida")
-
-    cmv = get("CMV, CPV ou CSP")  # sempre negativo
+    cmv = get("CMV, CPV ou CSP")  # já negativo
     lucro_bruto = receita + cmv
 
-    desp_vendas = get("Despesas de Vendas")  # sempre negativo
-    desp_ga = get("Despesas gerais e administrativas")  # sempre negativo
-    outras_oper = get("Outras despesas/receitas operacionais")  # LIVRE (respeita sinal)
-    da = get("Depreciação & Amortização")  # sempre negativo
+    desp_vendas = get("Despesas de Vendas")  # negativo
+    desp_ga = get("Despesas gerais e administrativas")  # negativo
+    outras_oper = get("Outras despesas/receitas operacionais")  # LIVRE
+    da = get("Depreciação & Amortização")  # negativo
 
+    # IMPORTANTE: EBIT é antes de juros e impostos; D&A é despesa operacional (entra no EBIT).
     ebit = lucro_bruto + desp_vendas + desp_ga + outras_oper + da
 
     fin = get("Resultado Financeiro")  # LIVRE
     outros_nonop = get("Outros Resultados Não Operacionais")  # LIVRE
     lair = ebit + fin + outros_nonop
 
-    imposto = get("Imposto de Renda")  # sempre negativo
+    imposto = get("Imposto de Renda")  # negativo
     lucro_liq = lair + imposto
 
-    ebitda = ebit - da  # add-back: como DA é negativo, subtrair DA soma
+    # EBITDA = EBIT + D&A (add-back). Como DA é negativo, subtrair DA soma.
+    ebitda = ebit - da
 
-    # 3) Escrever no df (auto)
-    def set_row(nome, serie):
-        mask = df_idx.index.map(conta_limpa) == nome
-        if mask.any():
-            for a in anos:
-                df_idx.loc[mask, a] = float(serie[a])
-
-
+    # 3) Escrever totais automáticos
     set_row("Lucro Bruto", lucro_bruto)
     set_row("Lucro Operacional - EBIT", ebit)
     set_row("Lucro Antes do IR", lair)
     set_row("Lucro Líquido", lucro_liq)
     set_row("EBITDA", ebitda)
 
-    # 4) Override (se preenchido substitui o auto)
-    for total in ["Lucro Bruto", "Lucro Operacional - EBIT", "Lucro Antes do IR", "Lucro Líquido", "EBITDA"]:
-        if total in df_idx.index and total in override_df.index:
-            for a in anos:
-                ovr = override_df.loc[total, a]
-                if pd.notna(ovr):
-                    df_idx.loc[total, a] = float(ovr)
+    # 4) Override (também por conta_limpa)
+    if override_df is not None and not override_df.empty:
+        # override_df tem index "Conta" (sem símbolos, como você cadastrou)
+        for total in ["Lucro Bruto", "Lucro Operacional - EBIT", "Lucro Antes do IR", "Lucro Líquido", "EBITDA"]:
+            if total in override_df.index:
+                m = mask_conta(total)
+                if m.any():
+                    for a in anos:
+                        ovr = override_df.loc[total, a]
+                        if pd.notna(ovr):
+                            df_idx.loc[m, a] = float(ovr)
 
     return df_idx.reset_index()
+
 
 
 def criar_override_df(contas_consolidadoras: list, anos: list) -> pd.DataFrame:
@@ -270,9 +722,10 @@ with tab1:
     # SUBABA — PREENCHIMENTO
     # =====================================================
     with subtab_edit:
-        # -----------------------------
+
+        # =========================
         # DRE
-        # -----------------------------
+        # =========================
         st.subheader("Demonstração do Resultado (DRE)")
 
         dre_contas = [
@@ -284,7 +737,7 @@ with tab1:
             "(+/-) Outras despesas/receitas operacionais",
             "(-) Depreciação & Amortização",
             "(=) Lucro Operacional - EBIT",
-            "(+/-) Resultado Financeiro",            
+            "(+/-) Resultado Financeiro",
             "(+/-) Outros Resultados Não Operacionais",
             "(=) Lucro Antes do IR",
             "(-) Imposto de Renda",
@@ -292,23 +745,25 @@ with tab1:
             "EBITDA",
         ]
 
-        # Base inicial (se já houver em session_state, reaproveita)
+        # Inicialização
         if "dre_raw" not in st.session_state:
-            dre_base = pd.DataFrame({"Conta": dre_contas})
+            df = pd.DataFrame({"Conta": dre_contas})
             for a in anos:
-                dre_base[a] = 0.0
-            st.session_state["dre_raw"] = dre_base.copy()
+                df[a] = ""
+            st.session_state["dre_raw"] = df
 
+        # Editor (NUNCA converter antes)
         dre_raw = st.data_editor(
             st.session_state["dre_raw"],
-            use_container_width=True,
+            disabled=["Conta"],
             num_rows="fixed",
+            use_container_width=True,
             key="dre_editor"
         )
         st.session_state["dre_raw"] = dre_raw.copy()
 
-        # Override separado (somente contas consolidadoras)
-        contas_consolidadoras_dre = [
+        # Override
+        contas_override_dre = [
             "Lucro Bruto",
             "Lucro Operacional - EBIT",
             "Lucro Antes do IR",
@@ -316,30 +771,31 @@ with tab1:
             "EBITDA",
         ]
 
-        st.markdown("#### Override de Totais (DRE) — opcional")
-        st.caption("Se preencher, o valor digitado substitui o cálculo automático. Se deixar vazio, o sistema calcula sozinho.")
-
         if "dre_override" not in st.session_state:
-            st.session_state["dre_override"] = criar_override_df(contas_consolidadoras_dre, anos)
+            st.session_state["dre_override"] = criar_override_df(contas_override_dre, anos)
 
         dre_override = st.data_editor(
             st.session_state["dre_override"].reset_index(),
-            use_container_width=True,
+            disabled=["Conta"],
             num_rows="fixed",
+            use_container_width=True,
             key="dre_override_editor"
-        )
-        dre_override = dre_override.set_index("Conta")
+        ).set_index("Conta")
+
         st.session_state["dre_override"] = dre_override.copy()
 
-        # Consolida (auto + override)
-        dre_calc = consolidar_dre_com_override(dre_raw, dre_override)
-        st.session_state["dre_df"] = dre_calc.copy()
+        # Conversão SOMENTE para cálculo
+        dre_num = garantir_numerico_df(dre_raw, anos)
+        dre_override_num = garantir_numerico_df(dre_override.reset_index(), anos).set_index("Conta")
+
+        # Consolidação
+        st.session_state["dre_df"] = consolidar_dre_com_override(dre_num, dre_override_num)
 
         st.divider()
 
-        # -----------------------------
+        # =========================
         # BALANÇO
-        # -----------------------------
+        # =========================
         st.subheader("Balanço Patrimonial")
 
         balanco_contas = [
@@ -349,27 +805,25 @@ with tab1:
             "Adiantamentos",
             "Outros ativos circulantes",
             "Ativo Circulante",
-
+            " ",
             "Investimentos em Outras Cias",
             "Imobilizado",
             "Intangível",
             "Propriedades para Investimentos",
             "Ativo Não Circulante",
-
             " ",
-
             "Empréstimos e Financiamentos (CP)",
             "Fornecedores",
             "Salários",
             "Impostos e Encargos Sociais",
             "Outros Passivos Circulantes",
             "Passivo Circulante",
-
+            " ",
             "Empréstimos e Financiamentos (LP)",
             "Impostos (LP)",
             "Outras Contas a Pagar",
             "Passivo Não Circulante",
-
+            " ",
             "Capital Social",
             "Reserva de Lucros",
             "Resultados Acumulados",
@@ -377,21 +831,21 @@ with tab1:
         ]
 
         if "bp_raw" not in st.session_state:
-            bp_base = pd.DataFrame({"Conta": balanco_contas})
+            df = pd.DataFrame({"Conta": balanco_contas})
             for a in anos:
-                bp_base[a] = 0.0
-            st.session_state["bp_raw"] = bp_base.copy()
+                df[a] = ""
+            st.session_state["bp_raw"] = df
 
         bp_raw = st.data_editor(
             st.session_state["bp_raw"],
-            use_container_width=True,
+            disabled=["Conta"],
             num_rows="fixed",
-            key="balanco_editor"
+            use_container_width=True,
+            key="bp_editor"
         )
         st.session_state["bp_raw"] = bp_raw.copy()
 
-        # Override separado (somente contas consolidadoras)
-        contas_consolidadoras_bp = [
+        contas_override_bp = [
             "Ativo Circulante",
             "Ativo Não Circulante",
             "Passivo Circulante",
@@ -399,28 +853,24 @@ with tab1:
             "Patrimônio Líquido",
         ]
 
-        st.markdown("#### Override de Totais (Balanço) — opcional")
-        st.caption("Se preencher, o valor digitado substitui o cálculo automático. Se deixar vazio, o sistema calcula sozinho.")
-
         if "bp_override" not in st.session_state:
-            st.session_state["bp_override"] = criar_override_df(contas_consolidadoras_bp, anos)
+            st.session_state["bp_override"] = criar_override_df(contas_override_bp, anos)
 
         bp_override = st.data_editor(
             st.session_state["bp_override"].reset_index(),
-            use_container_width=True,
+            disabled=["Conta"],
             num_rows="fixed",
+            use_container_width=True,
             key="bp_override_editor"
-        )
-        bp_override = bp_override.set_index("Conta")
+        ).set_index("Conta")
+
         st.session_state["bp_override"] = bp_override.copy()
 
-        # Consolida (auto + override)
-        bp_calc = consolidar_bp_com_override(bp_raw, bp_override)
-        if bp_calc is None:
-            st.session_state["balanco_df"] = bp_raw.copy()
-            st.warning("Consolidação do BP retornou vazio; exibindo os dados brutos.")
-        else:
-            st.session_state["balanco_df"] = bp_calc.copy()
+        bp_num = garantir_numerico_df(bp_raw, anos)
+        bp_override_num = garantir_numerico_df(bp_override.reset_index(), anos).set_index("Conta")
+
+        st.session_state["balanco_df"] = consolidar_bp_com_override(bp_num, bp_override_num)
+
 
 
     # =====================================================
@@ -574,12 +1024,12 @@ with tab1:
 
                 linhas.append({
                     "Período": periodo,
-                    "LL (DRE)": ll,
-                    "D&A (add-back)": da_addback,
-                    "Δ WC (consumo +)": delta_wc,
-                    "CFO": cfo,
-                    "CFI (proxy ANC)": cfi,
-                    "CFF (proxy Dívida+PL)": cff,
+                    "Lucro Líquido (DRE)": ll,
+                    "D&A": da_addback,
+                    "Δ Ativo Circulante": delta_wc,
+                    "Fluxo de Caixa Operacional": cfo,
+                    "Fluxo de Caixa de Invesimento (Δ ANC)": cfi,
+                    "Fluxo de Caixa de Financiamento": cff,
                     "Δ Caixa (calculado)": d_caixa_calc,
                     "Δ Caixa (BP)": d_caixa,
                     "Diferença (calc - BP)": d_caixa_calc - d_caixa
@@ -607,9 +1057,9 @@ with tab1:
             st.divider()
             st.markdown("#### Leitura rápida")
             st.write(
-                "- **CFO**: lucro líquido ajustado por D&A e variação do capital de giro (ΔWC).\n"
-                "- **CFI**: proxy por variação do Ativo Não Circulante (pode diferir de CAPEX real).\n"
-                "- **CFF**: proxy por variação de dívida e PL (não separa dividendos/juros pagos).\n"
+                "- **CFO**: lucro líquido somado por D&A e variação do capital de giro (Δ AC).\n"
+                "- **CFI**: proxy por variação do Ativo Não Circulante.\n"
+                "- **CFF**: proxy por variação de dívida e PL.\n"
                 "- **Diferença**: mostra o quanto o modelo gerencial diverge da variação de caixa do BP."
             )
 
@@ -785,13 +1235,7 @@ with tab2:
             cop_u = df_ciclos.loc[df_ciclos["Indicador"] == "Ciclo Operacional", ultimo].values[0]
             cfi_u = df_ciclos.loc[df_ciclos["Indicador"] == "Ciclo Financeiro", ultimo].values[0]
 
-            k1, k2, k3, k4, k5 = st.columns(5)
-            k1.metric("PMR (dias)", f"{pmr_u:.0f}" if pd.notna(pmr_u) else "n/a")
-            k2.metric("PME (dias)", f"{pme_u:.0f}" if pd.notna(pme_u) else "n/a")
-            k3.metric("PMP (dias)", f"{pmp_u:.0f}" if pd.notna(pmp_u) else "n/a")
-            k4.metric("Ciclo Operacional", f"{cop_u:.0f}" if pd.notna(cop_u) else "n/a")
-            k5.metric("Ciclo Financeiro", f"{cfi_u:.0f}" if pd.notna(cfi_u) else "n/a")
-
+           
         with sub_tes:
             st.markdown("### 🏦 Tesouraria — IOG, CPL e Saldo de Tesouraria")
 
@@ -907,10 +1351,4 @@ with tab2:
 
                 st.plotly_chart(fig, use_container_width=True)
 
-                # Cards do último ano
-                ultimo = anos_plot[-1]
-                c1, c2, c3, c4 = st.columns(4)
-                c1.metric("IOG", f"R$ {float(iog[ultimo]):,.0f}".replace(",", "X").replace(".", ",").replace("X", "."))
-                c2.metric("CPL", f"R$ {float(cpl[ultimo]):,.0f}".replace(",", "X").replace(".", ",").replace("X", "."))
-                c3.metric("Saldo Tesouraria", f"R$ {float(st_saldo[ultimo]):,.0f}".replace(",", "X").replace(".", ",").replace("X", "."))
-                c4.metric("Vendas", f"R$ {float(vendas[ultimo]):,.0f}".replace(",", "X").replace(".", ",").replace("X", "."))
+               
