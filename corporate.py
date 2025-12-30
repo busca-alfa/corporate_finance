@@ -1092,9 +1092,10 @@ with tab2:
             return pd.to_numeric(out, errors="coerce").fillna(0.0)
 
         def safe_div(n, d):
-            return np.where(np.asarray(d) == 0, np.nan, np.asarray(n) / np.asarray(d))
+            n = np.asarray(n, dtype=float)
+            d = np.asarray(d, dtype=float)
+            return np.where(d == 0, np.nan, n / d)
 
-        # Anos efetivamente preenchidos (algum valor diferente de zero)
         def anos_preenchidos(df):
             cols = []
             for a in anos:
@@ -1103,14 +1104,275 @@ with tab2:
                     cols.append(a)
             return cols
 
-        anos_ok = sorted(set(anos_preenchidos(dre_df)) | set(anos_preenchidos(bp_df)), key=lambda x: int(x.split()[-1]))
+        anos_ok = sorted(set(anos_preenchidos(dre_df)) | set(anos_preenchidos(bp_df)),
+                         key=lambda x: int(x.split()[-1]))
         if len(anos_ok) == 0:
-            anos_ok = anos[:]  # fallback
+            anos_ok = anos[:]
+
+        def cagr(v0, v1, n_int):
+            if n_int <= 0 or v0 is None or v1 is None:
+                return None
+            v0 = float(v0); v1 = float(v1)
+            if v0 <= 0 or v1 <= 0:
+                return None
+            return (v1 / v0) ** (1 / n_int) - 1
+
+        def first_last_and_nint(serie: pd.Series):
+            vals = [float(serie[a]) for a in anos_ok]
+            idx = [i for i, v in enumerate(vals) if v != 0.0]
+            if len(idx) < 2:
+                return 0.0, 0.0, 0
+            i0, i1 = idx[0], idx[-1]
+            return vals[i0], vals[i1], (i1 - i0)
 
         # -------------------------------------------------
         # Subabas
         # -------------------------------------------------
-        sub_avah, sub_ciclos, sub_tes = st.tabs(["📊 Vertical & Horizontal", "⏱️ PMR • PME • PMP", "🏦 Tesouraria"])
+        sub_indic, sub_avah, sub_ciclos, sub_tes, sub_wacc = st.tabs([
+            "📈 Indicadores & CAGR",
+            "📊 Vertical & Horizontal",
+            "⏱️ PMR • PME • PMP",
+            "🏦 Tesouraria",
+            "💰 WACC & Valor"
+        ])
+
+        # =================================================
+        # SUBABA 0 — Indicadores + Gráfico + CAGR
+        # =================================================
+        with sub_indic:
+            st.markdown("## 📈 Evolução de Indicadores")
+            st.caption("Selecione indicadores para ver a evolução por período. Tabela: linhas = indicadores, colunas = anos.")
+
+            # -----------------------------
+            # Helpers numéricos
+            # -----------------------------
+            def safe_div_scalar(n, d):
+                try:
+                    n = float(n)
+                    d = float(d)
+                    if d == 0:
+                        return np.nan
+                    return n / d
+                except Exception:
+                    return np.nan
+
+            def to_float_series(s):
+                # garante float por ano
+                out = {}
+                for a in anos_ok:
+                    try:
+                        out[a] = float(s[a])
+                    except Exception:
+                        out[a] = 0.0
+                return pd.Series(out)
+
+            # -----------------------------
+            # Séries base (DRE / BP)
+            # -----------------------------
+            receita = get_serie(dre_df, "Receita Líquida")
+            cmv     = get_serie(dre_df, "CMV, CPV ou CSP").abs()  # usa módulo
+            ebit    = get_serie(dre_df, "Lucro Operacional - EBIT")
+            ebitda  = get_serie(dre_df, "EBITDA")
+            lucro   = get_serie(dre_df, "Lucro Líquido")
+
+            caixa   = get_serie(bp_df, "Caixa e Similares")
+            cr      = get_serie(bp_df, "Contas a Receber")
+            est     = get_serie(bp_df, "Estoques")
+            adi     = get_serie(bp_df, "Adiantamentos")
+
+            forn    = get_serie(bp_df, "Fornecedores")
+            sal     = get_serie(bp_df, "Salários")
+            imp     = get_serie(bp_df, "Impostos e Encargos Sociais")
+
+            anc     = get_serie(bp_df, "Ativo Não Circulante")
+            ac      = get_serie(bp_df, "Ativo Circulante")
+            pnc     = get_serie(bp_df, "Passivo Não Circulante")
+            pc      = get_serie(bp_df, "Passivo Circulante")
+            pl      = get_serie(bp_df, "Patrimônio Líquido")
+
+            div_cp  = get_serie(bp_df, "Empréstimos e Financiamentos (CP)")
+            div_lp  = get_serie(bp_df, "Empréstimos e Financiamentos (LP)")
+            div_bruta = div_cp + div_lp
+            div_liq   = div_bruta - caixa
+
+            # -----------------------------
+            # Tesouraria (Fleuriet)
+            # CPL = (PNC + PL) - ANC
+            # IOG = ACC - PCC
+            # ACC = CR + Estoques + Adiantamentos
+            # PCC = Fornecedores + Salários + Impostos e Encargos Sociais
+            # -----------------------------
+            acc = cr + est + adi
+            pcc = forn + sal + imp
+            iog = acc - pcc
+            cpl = (pnc + pl) - anc
+            saldo_tes = iog - cpl
+
+            # -----------------------------
+            # Proxy simples de FCO (se você já tem um cálculo melhor, substitua aqui)
+            # FCO proxy = Lucro Líquido + D&A + variações de capital de giro
+            # Você ainda não tem D&A separado em BP, mas tem na DRE: Depreciação & Amortização
+            # (No seu modelo, D&A costuma estar negativa; usamos módulo)
+            # -----------------------------
+            da = get_serie(dre_df, "Depreciação & Amortização").abs()
+
+            # var capital de giro operacional (bem simples):
+            # Δ(Contas a Receber + Estoques + Adiantamentos) - Δ(Fornecedores + Salários + Impostos Enc. Sociais)
+            def delta_ano(serie, a_now, a_prev):
+                return float(serie[a_now]) - float(serie[a_prev])
+
+            fco = pd.Series({a: np.nan for a in anos_ok})
+            for i, a in enumerate(anos_ok):
+                if i == 0:
+                    fco[a] = np.nan
+                else:
+                    ap = anos_ok[i-1]
+                    delta_acc = delta_ano(acc, a, ap)
+                    delta_pcc = delta_ano(pcc, a, ap)
+                    var_cg = delta_acc - delta_pcc
+                    # lucro + DA - var_cg (se var_cg aumenta, consome caixa)
+                    fco[a] = float(lucro[a]) + float(da[a]) - float(var_cg)
+
+            # -----------------------------
+            # ROIC (aproximação)
+            # NOPAT ~ EBIT * (1 - IR)
+            # Capital Investido ~ IOG + ANC  (proxy simples, consistente com o seu modelo)
+            # IR como input local (por enquanto)
+            # -----------------------------
+            ir_eff = st.number_input("Alíquota efetiva para ROIC (IR/CSLL) %", value=34.0, step=1.0) / 100
+
+            roic = pd.Series({a: np.nan for a in anos_ok})
+            for a in anos_ok:
+                nopat = float(ebit[a]) * (1 - ir_eff)
+                cap_inv = float(iog[a]) + float(anc[a])
+                roic[a] = safe_div_scalar(nopat, cap_inv) * 100.0
+
+            # -----------------------------
+            # Monta TODOS os indicadores (linhas)
+            # -----------------------------
+            indicadores = {}
+
+            # Básicos
+            indicadores["Receita Líquida (R$)"] = to_float_series(receita)
+            indicadores["EBITDA (R$)"]          = to_float_series(ebitda)
+            indicadores["EBIT (R$)"]            = to_float_series(ebit)
+            indicadores["Lucro Líquido (R$)"]   = to_float_series(lucro)
+            indicadores["Caixa (R$)"]           = to_float_series(caixa)
+            indicadores["Dívida Bruta (R$)"]    = to_float_series(div_bruta)
+            indicadores["Dívida Líquida (R$)"]  = to_float_series(div_liq)
+
+            # Estruturais / Tesouraria
+            indicadores["ACC (R$)"]                 = to_float_series(acc)
+            indicadores["PCC (R$)"]                 = to_float_series(pcc)
+            indicadores["IOG (R$)"]                 = to_float_series(iog)
+            indicadores["CPL (R$)"]                 = to_float_series(cpl)
+            indicadores["Saldo de Tesouraria (R$)"] = to_float_series(saldo_tes)
+
+            # Avançados (múltiplos)
+            # (x) = "vezes"
+            indicadores["Dívida Líquida / EBITDA (x)"] = pd.Series({a: safe_div_scalar(div_liq[a], ebitda[a]) for a in anos_ok})
+            indicadores["Dívida Líquida / FCO (x)"]    = pd.Series({a: safe_div_scalar(div_liq[a], fco[a]) for a in anos_ok})
+            indicadores["Receita Líquida / FCO (x)"]   = pd.Series({a: safe_div_scalar(receita[a], fco[a]) for a in anos_ok})
+            indicadores["ROIC (%)"]                    = to_float_series(roic)
+
+            # (se quiser incluir mais agora)
+            indicadores["Dívida Bruta / PL (x)"]       = pd.Series({a: safe_div_scalar(div_bruta[a], pl[a]) for a in anos_ok})
+            indicadores["Dívida Líquida / PL (x)"]     = pd.Series({a: safe_div_scalar(div_liq[a], pl[a]) for a in anos_ok})
+
+            # -----------------------------
+            # DataFrame final (linhas = indicadores, colunas = anos)
+            # -----------------------------
+            df_ind = pd.DataFrame(indicadores).T
+            df_ind = df_ind[anos_ok]  # garante ordem
+
+            # Formatação: define quais são % e quais são (x)
+            fmt = {}
+            for a in anos_ok:
+                fmt[a] = "R$ {:,.0f}"  # default
+
+            def is_percent(name): return "(%)" in name or name.endswith("%)") or name.endswith("(%)") or name == "ROIC (%)"
+            def is_multiple(name): return "(x)" in name
+
+            # Styler com formatação por linha (aplica por máscara)
+            def style_format_rowwise(df):
+                sty = df.style
+                # Vamos formatar depois com applymap? Melhor: criar um df_str? Mantemos simples e eficiente:
+                return sty
+
+            # Mostrar tabela com formatação condicional simples:
+            st.markdown("### 📌 Tabela de Indicadores (Anos nas colunas)")
+            df_show = df_ind.copy()
+
+            # cria tabela de strings formatadas por linha
+            df_str = df_show.copy().astype(object)
+            for idx in df_str.index:
+                for a in anos_ok:
+                    v = df_show.loc[idx, a]
+                    if pd.isna(v):
+                        df_str.loc[idx, a] = ""
+                    else:
+                        if is_percent(idx):
+                            df_str.loc[idx, a] = f"{float(v):,.2f}%"
+                        elif is_multiple(idx):
+                            df_str.loc[idx, a] = f"{float(v):,.2f}x"
+                        else:
+                            df_str.loc[idx, a] = f"R$ {float(v):,.0f}"
+
+            st.dataframe(
+                df_str,
+                use_container_width=True,
+                height=min(900, 40 + 32 * (len(df_str) + 2))
+            )
+
+            st.divider()
+
+            # -----------------------------
+            # Gráfico: seleção livre de indicadores
+            # -----------------------------
+            st.markdown("### 📉 Gráfico — evolução dos indicadores")
+
+            opcoes = list(df_ind.index)
+            sel = st.multiselect(
+                "Escolha os indicadores para plotar",
+                options=opcoes,
+                default=["Receita Líquida (R$)", "EBITDA (R$)", "Dívida Líquida (R$)"] if all(x in opcoes for x in ["Receita Líquida (R$)", "EBITDA (R$)", "Dívida Líquida (R$)"]) else opcoes[:3]
+            )
+
+            normalizar = st.checkbox("Normalizar (base 100 no primeiro ano com valor)", value=False)
+
+            def norm_series(s: pd.Series) -> pd.Series:
+                if not normalizar:
+                    return s
+                base = None
+                for a in anos_ok:
+                    v = s[a]
+                    if pd.notna(v) and float(v) != 0.0:
+                        base = float(v)
+                        break
+                if base in (None, 0.0):
+                    return s * 0.0
+                return (s / base) * 100.0
+
+            fig = go.Figure()
+            for name in sel:
+                s = df_ind.loc[name, anos_ok].astype(float)
+                s_plot = norm_series(s)
+                fig.add_trace(go.Scatter(
+                    x=anos_ok,
+                    y=[float(s_plot[a]) if pd.notna(s_plot[a]) else None for a in anos_ok],
+                    mode="lines+markers",
+                    name=name
+                ))
+
+            fig.update_layout(
+                height=520,
+                xaxis_title="Período",
+                yaxis_title="Base 100" if normalizar else "Valor",
+                legend_title="Indicadores",
+                margin=dict(l=10, r=10, t=10, b=10)
+            )
+
+            st.plotly_chart(fig, use_container_width=True)
 
         # =================================================
         # SUBABA 1 — Vertical & Horizontal
@@ -1122,49 +1384,31 @@ with tab2:
 
             if alvo == "DRE":
                 df_base = dre_df.copy()
-                # Base da vertical: Receita Líquida
-                base_conta = "Receita Líquida"
                 base_nome = "Receita Líquida"
+                base = get_serie(df_base, "Receita Líquida")
             else:
                 df_base = bp_df.copy()
-                # Base da vertical: Ativo Circulante + Ativo Não Circulante (proxy do Ativo Total na sua estrutura)
-                # Como você não tem "Ativo Total", usamos "Ativo Circulante" + "Ativo Não Circulante"
-                base_conta = None
                 base_nome = "Ativo Total (AC + ANC)"
+                base = get_serie(df_base, "Ativo Circulante") + get_serie(df_base, "Ativo Não Circulante")
 
-            # Normaliza colunas numéricas
             for a in anos:
                 df_base[a] = pd.to_numeric(df_base[a], errors="coerce").fillna(0.0)
 
-            # Coluna lógica
-            df_base["_Conta_Limpa"] = df_base["Conta"].astype(str).map(conta_limpa)
-
             # -------- Vertical (%)
-            if alvo == "DRE":
-                base = get_serie(df_base, base_conta)
-            else:
-                base = get_serie(df_base, "Ativo Circulante") + get_serie(df_base, "Ativo Não Circulante")
-
             df_vert = df_base[["Conta"] + anos_ok].copy()
             for a in anos_ok:
                 df_vert[a] = safe_div(df_vert[a].values, float(base[a])) * 100.0
 
-            # -------- Horizontal (% var e var abs)
-            df_habs = df_base[["Conta"] + anos_ok].copy()
+            # -------- Horizontal (% var)
             df_hpct = df_base[["Conta"] + anos_ok].copy()
-
-            # var abs e % vs ano anterior (Ano i vs Ano i-1)
             for j in range(1, len(anos_ok)):
                 a_now = anos_ok[j]
                 a_prev = anos_ok[j-1]
                 abs_var = df_base[a_now] - df_base[a_prev]
                 pct_var = safe_div(abs_var.values, df_base[a_prev].values) * 100.0
-                df_habs[a_now] = abs_var
                 df_hpct[a_now] = pct_var
 
-            # primeiro ano não tem comparação
             if len(anos_ok) >= 1:
-                df_habs[anos_ok[0]] = np.nan
                 df_hpct[anos_ok[0]] = np.nan
 
             c1, c2 = st.columns(2)
@@ -1173,7 +1417,7 @@ with tab2:
                 st.dataframe(
                     df_vert.style.format({a: "{:,.2f}%" for a in anos_ok}),
                     use_container_width=True,
-                    height=min(1000, 40 + 32 * (len(df_vert) + 2))
+                    height=min(1200, 40 + 32 * (len(df_vert) + 2))
                 )
 
             with c2:
@@ -1181,23 +1425,14 @@ with tab2:
                 st.dataframe(
                     df_hpct.style.format({a: "{:,.2f}%" for a in anos_ok}),
                     use_container_width=True,
-                    height=min(1000, 40 + 32 * (len(df_hpct) + 2))
+                    height=min(1200, 40 + 32 * (len(df_hpct) + 2))
                 )
-
 
         # =================================================
         # SUBABA 2 — PMR / PME / PMP
         # =================================================
         with sub_ciclos:
             st.markdown("### ⏱️ Ciclo de Caixa — PMR, PME, PMP")
-
-            st.caption(
-                "Premissas padrão (ajustáveis depois):\n"
-                "- **PMR** = Contas a Receber / Receita Líquida × 365\n"
-                "- **PME** = Estoques / CMV × 365\n"
-                "- **PMP** = Fornecedores / CMV × 365\n"
-                "Obs.: CMV é usado em módulo (se estiver negativo no seu modelo)."
-            )
 
             receita = get_serie(dre_df, "Receita Líquida")
             cmv = get_serie(dre_df, "CMV, CPV ou CSP")
@@ -1207,9 +1442,9 @@ with tab2:
             est = get_serie(bp_df, "Estoques")
             forn = get_serie(bp_df, "Fornecedores")
 
-            df_ciclos = pd.DataFrame({
-                "Indicador": ["PMR (dias)", "PME (dias)", "PMP (dias)", "Ciclo Operacional", "Ciclo Financeiro"],
-            })
+            df_ciclos = pd.DataFrame({"Indicador": [
+                "PMR (dias)", "PME (dias)", "PMP (dias)", "Ciclo Operacional", "Ciclo Financeiro"
+            ]})
 
             for a in anos_ok:
                 pmr = float(safe_div(cr[a], receita[a]) * 365.0) if receita[a] != 0 else np.nan
@@ -1224,10 +1459,9 @@ with tab2:
             st.dataframe(
                 df_ciclos.style.format({a: "{:,.0f}" for a in anos_ok}),
                 use_container_width=True,
-                height=min(600, 40 + 35 * (len(df_ciclos) + 2))
+                height=min(650, 40 + 35 * (len(df_ciclos) + 2))
             )
 
-            # Cards do último período disponível
             ultimo = anos_ok[-1]
             pmr_u = df_ciclos.loc[df_ciclos["Indicador"] == "PMR (dias)", ultimo].values[0]
             pme_u = df_ciclos.loc[df_ciclos["Indicador"] == "PME (dias)", ultimo].values[0]
@@ -1235,120 +1469,216 @@ with tab2:
             cop_u = df_ciclos.loc[df_ciclos["Indicador"] == "Ciclo Operacional", ultimo].values[0]
             cfi_u = df_ciclos.loc[df_ciclos["Indicador"] == "Ciclo Financeiro", ultimo].values[0]
 
-           
+            st.divider()
+            k1, k2, k3, k4, k5 = st.columns(5)
+            k1.metric("PMR", f"{pmr_u:.0f}" if pd.notna(pmr_u) else "n/a")
+            k2.metric("PME", f"{pme_u:.0f}" if pd.notna(pme_u) else "n/a")
+            k3.metric("PMP", f"{pmp_u:.0f}" if pd.notna(pmp_u) else "n/a")
+            k4.metric("Ciclo Operacional", f"{cop_u:.0f}" if pd.notna(cop_u) else "n/a")
+            k5.metric("Ciclo Financeiro", f"{cfi_u:.0f}" if pd.notna(cfi_u) else "n/a")
+
+        # =================================================
+        # SUBABA 3 — Tesouraria (Fleuriet)
+        # =================================================
         with sub_tes:
             st.markdown("### 🏦 Tesouraria — IOG, CPL e Saldo de Tesouraria")
 
-            dre_df = st.session_state.get("dre_df")
-            bp_df  = st.session_state.get("balanco_df")
+            # Séries do BP
+            cr   = get_serie(bp_df, "Contas a Receber")
+            est  = get_serie(bp_df, "Estoques")
+            adi  = get_serie(bp_df, "Adiantamentos")
 
-            if dre_df is None or bp_df is None or dre_df.empty or bp_df.empty:
-                st.warning("Preencha DRE e Balanço na aba 'Banco de Dados' para habilitar Tesouraria.")
-            else:
-                # Helpers compatíveis com símbolos em Conta
-                def _conta_col(df):
-                    return df["Conta"].astype(str).map(conta_limpa)
+            forn = get_serie(bp_df, "Fornecedores")
+            sal  = get_serie(bp_df, "Salários")
+            imp  = get_serie(bp_df, "Impostos e Encargos Sociais")
 
-                def get_serie(df, conta):
-                    s = _conta_col(df)
-                    mask = (s == conta)
-                    if not mask.any():
-                        return pd.Series({a: 0.0 for a in anos})
-                    out = df.loc[mask, anos].iloc[0]
-                    return pd.to_numeric(out, errors="coerce").fillna(0.0)
+            anc  = get_serie(bp_df, "Ativo Não Circulante")
+            pnc  = get_serie(bp_df, "Passivo Não Circulante")
+            pl   = get_serie(bp_df, "Patrimônio Líquido")
 
-                # Séries do BP
-                cr   = get_serie(bp_df, "Contas a Receber")
-                est  = get_serie(bp_df, "Estoques")
-                adi  = get_serie(bp_df, "Adiantamentos")
+            vendas = get_serie(dre_df, "Receita Líquida")
 
-                forn = get_serie(bp_df, "Fornecedores")
-                sal  = get_serie(bp_df, "Salários")
-                imp  = get_serie(bp_df, "Impostos e Encargos Sociais")
+            # Cálculos (como você definiu)
+            acc = cr + est + adi
+            pcc = forn + sal + imp
+            iog = acc - pcc
+            cpl = (pnc + pl) - anc
+            st_saldo = iog - cpl  # seu padrão
 
-                anc  = get_serie(bp_df, "Ativo Não Circulante")
-                pnc  = get_serie(bp_df, "Passivo Não Circulante")
-                pl   = get_serie(bp_df, "Patrimônio Líquido")
+            df_tes = pd.DataFrame({
+                "Vendas (Receita Líquida)": vendas,
+                "ACC (CR + Estoques + Adiant.)": acc,
+                "PCC (Forn + Sal + Imp)": pcc,
+                "IOG (ACC - PCC)": iog,
+                "CPL ((PNC + PL) - ANC)": cpl,
+                "Saldo de Tesouraria (IOG - CPL)": st_saldo,
+            }).T
+            df_tes.columns = anos
 
-                # Série da DRE (Vendas)
-                vendas = get_serie(dre_df, "Receita Líquida")
+            st.dataframe(
+                df_tes.style.format({a: "R$ {:,.0f}" for a in anos}),
+                use_container_width=True,
+                height=min(560, 40 + 32 * (len(df_tes) + 2))
+            )
 
-                # Cálculos (como você definiu)
-                acc = cr + est + adi
-                pcc = forn + sal + imp
-                iog = acc - pcc
+            st.divider()
+            st.markdown("#### Evolução — Vendas, IOG, CPL e Saldo de Tesouraria")
 
-                cpl = (pnc + pl) - anc
-                st_saldo = iog - cpl  # conforme seu padrão
+            normalizar = st.checkbox("Normalizar (base 100 no primeiro ano preenchido)", value=False)
 
-                # Monta tabela (linhas variáveis, colunas anos)
-                df_tes = pd.DataFrame({
-                    "Vendas (Receita Líquida)": vendas,
-                    "ACC (CR + Estoques + Adiant.)": acc,
-                    "PCC (Forn + Sal + Imp)": pcc,
-                    "IOG (ACC - PCC)": iog,
-                    "CPL ((PNC + PL) - ANC)": cpl,
-                    "Saldo de Tesouraria (IOG - CPL)": st_saldo,
-                }).T
-                df_tes.columns = anos
+            anos_plot = anos_ok[:]
+            if not anos_plot:
+                anos_plot = anos[:]
+
+            def _norm(s: pd.Series) -> pd.Series:
+                if not normalizar:
+                    return s
+                base = None
+                for a in anos_plot:
+                    v = float(s[a])
+                    if v != 0.0:
+                        base = v
+                        break
+                if base in (None, 0.0):
+                    return s * 0.0
+                return (s / base) * 100.0
+
+            x = anos_plot
+            vendas_p = _norm(vendas)
+            iog_p    = _norm(iog)
+            cpl_p    = _norm(cpl)
+            st_p     = _norm(st_saldo)
+
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=x, y=[float(vendas_p[a]) for a in x], mode="lines+markers", name="Vendas"))
+            fig.add_trace(go.Scatter(x=x, y=[float(iog_p[a]) for a in x],    mode="lines+markers", name="IOG"))
+            fig.add_trace(go.Scatter(x=x, y=[float(cpl_p[a]) for a in x],    mode="lines+markers", name="CPL"))
+            fig.add_trace(go.Scatter(x=x, y=[float(st_p[a]) for a in x],     mode="lines+markers", name="Saldo de Tesouraria"))
+
+            fig.update_layout(
+                height=520,
+                xaxis_title="Período",
+                yaxis_title="Base 100" if normalizar else "R$",
+                legend_title="Séries",
+                margin=dict(l=10, r=10, t=10, b=10)
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+        # =================================================
+        # SUBABA — WACC & Criação de Valor
+        # =================================================
+        with sub_wacc:
+            st.markdown("### 💰 Custo Médio Ponderado de Capital (WACC)")
+
+            # -----------------------------
+            # Inputs macro (simples e claros)
+            # -----------------------------
+            c1, c2, c3, c4 = st.columns(4)
+
+            with c1:
+                rf = st.number_input("Taxa livre de risco (Rf) % a.a.", value=10.0, step=0.1) / 100
+            with c2:
+                premio = st.number_input("Prêmio de risco de mercado % a.a.", value=6.0, step=0.1) / 100
+            with c3:
+                beta = st.number_input("Beta da empresa", value=1.0, step=0.05)
+            with c4:
+                ir = st.number_input("Alíquota de IR/CSLL %", value=34.0, step=1.0) / 100
+
+            st.divider()
+
+            # -----------------------------
+            # Séries financeiras
+            # -----------------------------
+            div_cp  = get_serie(bp_df, "Empréstimos e Financiamentos (CP)")
+            div_lp  = get_serie(bp_df, "Empréstimos e Financiamentos (LP)")
+            div_bruta = div_cp + div_lp
+
+            caixa = get_serie(bp_df, "Caixa e Similares")
+            div_liq = div_bruta - caixa
+
+            pl = get_serie(bp_df, "Patrimônio Líquido")
+
+            # Dívida média (proxy simples)
+            div_media = div_bruta
+
+            # -----------------------------
+            # Custo da Dívida (input)
+            # -----------------------------
+            kd = st.number_input(
+                "Custo médio da dívida (Kd) % a.a.",
+                value=12.0,
+                step=0.1
+            ) / 100
+
+            # -----------------------------
+            # Cálculo Ke (CAPM)
+            # -----------------------------
+            ke = rf + beta * premio
+
+            # -----------------------------
+            # Pesos de capital
+            # -----------------------------
+            d = div_bruta
+            e = pl
+            total_cap = d + e
+
+            peso_d = safe_div(d.values, total_cap.values)
+            peso_e = safe_div(e.values, total_cap.values)
+
+            # -----------------------------
+            # WACC
+            # -----------------------------
+            wacc = ke * peso_e + kd * (1 - ir) * peso_d
+
+            # -----------------------------
+            # ROIC (já calculado antes)
+            # -----------------------------
+            roic = st.session_state.get("roic_serie")
+
+            # -----------------------------
+            # DataFrame final
+            # -----------------------------
+            df_wacc = pd.DataFrame({
+                "Dívida Bruta": div_bruta,
+                "Patrimônio Líquido": pl,
+                "Peso Dívida (%)": peso_d * 100,
+                "Peso PL (%)": peso_e * 100,
+                "Ke (%)": ke * 100,
+                "Kd pós-IR (%)": kd * (1 - ir) * 100,
+                "WACC (%)": wacc * 100,
+            }, index=anos)
+
+            st.dataframe(
+                df_wacc.style.format({
+                    a: "{:,.2f}" for a in anos
+                }),
+                use_container_width=True,
+                height=520
+            )
+
+            st.divider()
+
+            # -----------------------------
+            # Criação de valor
+            # -----------------------------
+            st.markdown("### 🧠 Criação de Valor")
+
+            if roic is not None:
+                spread = roic - (wacc * 100)
+
+                df_valor = pd.DataFrame({
+                    "ROIC (%)": roic,
+                    "WACC (%)": wacc * 100,
+                    "Spread ROIC − WACC (p.p.)": spread,
+                }, index=anos)
 
                 st.dataframe(
-                    df_tes.style.format({a: "R$ {:,.0f}" for a in anos}),
+                    df_valor.style.format({
+                        a: "{:,.2f}" for a in anos
+                    }),
                     use_container_width=True,
-                    height=min(520, 40 + 32 * (len(df_tes) + 2))
+                    height=420
                 )
+            else:
+                st.info("ROIC não disponível para comparação.")
 
-                st.divider()
-
-                # Gráfico (evolução)
-                st.markdown("#### Evolução — Vendas, IOG, CPL e Saldo de Tesouraria")
-
-                normalizar = st.checkbox("Normalizar (base 100 no primeiro ano preenchido)", value=False)
-
-                # Detecta anos preenchidos (para não plotar tudo zero)
-                anos_plot = []
-                for a in anos:
-                    col = df_tes[a].astype(float)
-                    if float(np.nansum(np.abs(col.values))) != 0.0:
-                        anos_plot.append(a)
-                if not anos_plot:
-                    anos_plot = anos[:]
-
-                # Prepara séries para plot
-                def _norm(s: pd.Series) -> pd.Series:
-                    if not normalizar:
-                        return s
-                    # base = primeiro ano com valor != 0
-                    base = None
-                    for a in anos_plot:
-                        v = float(s[a])
-                        if v != 0.0:
-                            base = v
-                            break
-                    if base in (None, 0.0):
-                        return s * 0.0
-                    return (s / base) * 100.0
-
-                x = anos_plot
-                vendas_p = _norm(vendas)
-                iog_p    = _norm(iog)
-                cpl_p    = _norm(cpl)
-                st_p     = _norm(st_saldo)
-
-                fig = go.Figure()
-                fig.add_trace(go.Scatter(x=x, y=[float(vendas_p[a]) for a in x], mode="lines+markers", name="Vendas"))
-                fig.add_trace(go.Scatter(x=x, y=[float(iog_p[a]) for a in x],    mode="lines+markers", name="IOG"))
-                fig.add_trace(go.Scatter(x=x, y=[float(cpl_p[a]) for a in x],    mode="lines+markers", name="CPL"))
-                fig.add_trace(go.Scatter(x=x, y=[float(st_p[a]) for a in x],     mode="lines+markers", name="Saldo de Tesouraria"))
-
-                fig.update_layout(
-                    height=520,
-                    xaxis_title="Período",
-                    yaxis_title="Base 100" if normalizar else "R$",
-                    legend_title="Séries",
-                    margin=dict(l=10, r=10, t=10, b=10)
-                )
-
-                st.plotly_chart(fig, use_container_width=True)
-
-               
