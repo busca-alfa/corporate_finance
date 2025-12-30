@@ -1238,6 +1238,8 @@ with tab2:
             indic["Dívida Total / PL (x)"]       = safe_div(div_total, pl)
             indic["Dívida Líquida / PL (x)"]     = safe_div(div_liq, pl)
             indic["Dívida Líquida / EBITDA (x)"] = safe_div(div_liq, ebitda)
+            indic["Participação de Capitais de Terceiros (%)"] = (safe_div(pc + pnc, pc + pnc + pl) * 100.0
+)
 
             # Liquidez
             indic["Liquidez Corrente (AC/PC)"]      = safe_div(ac, pc)
@@ -1551,120 +1553,200 @@ with tab2:
             st.plotly_chart(fig, use_container_width=True)
 
         # =================================================
-        # SUBABA — WACC & Criação de Valor
+        # SUBABA — WACC & Valor
         # =================================================
         with sub_wacc:
-            st.markdown("### 💰 Custo Médio Ponderado de Capital (WACC)")
+            st.markdown("## 💰 Custo Médio Ponderado de Capital (WACC)")
 
             # -----------------------------
-            # Inputs macro (simples e claros)
+            # Inputs (parâmetros)
             # -----------------------------
             c1, c2, c3, c4 = st.columns(4)
-
             with c1:
-                rf = st.number_input("Taxa livre de risco (Rf) % a.a.", value=10.0, step=0.1) / 100
+                rf = st.number_input("Taxa livre de risco (Rf) % a.a.", value=10.0, step=0.25) / 100.0
             with c2:
-                premio = st.number_input("Prêmio de risco de mercado % a.a.", value=6.0, step=0.1) / 100
+                mrp = st.number_input("Prêmio de risco de mercado % a.a.", value=6.0, step=0.25) / 100.0
             with c3:
                 beta = st.number_input("Beta da empresa", value=1.0, step=0.05)
             with c4:
-                ir = st.number_input("Alíquota de IR/CSLL %", value=34.0, step=1.0) / 100
+                tax = st.number_input("Alíquota de IR/CSLL %", value=34.0, step=1.0) / 100.0
+
+            kd = st.number_input("Custo médio da dívida (Kd) % a.a.", value=12.0, step=0.25) / 100.0
 
             st.divider()
 
             # -----------------------------
-            # Séries financeiras
+            # Séries base (BP / DRE)
             # -----------------------------
-            div_cp  = get_serie(bp_df, "Empréstimos e Financiamentos (CP)")
-            div_lp  = get_serie(bp_df, "Empréstimos e Financiamentos (LP)")
-            div_bruta = div_cp + div_lp
+            # Dívida bruta (proxy = empréstimos CP + LP) e PL
+            div_cp = get_serie(bp_df, "Empréstimos e Financiamentos (CP)")
+            div_lp = get_serie(bp_df, "Empréstimos e Financiamentos (LP)")
+            debt = div_cp + div_lp
 
-            caixa = get_serie(bp_df, "Caixa e Similares")
-            div_liq = div_bruta - caixa
+            equity = get_serie(bp_df, "Patrimônio Líquido")
 
-            pl = get_serie(bp_df, "Patrimônio Líquido")
+            # ROIC (recalcula aqui para não depender de outra subaba)
+            ebit = get_serie(dre_df, "Lucro Operacional - EBIT")
 
-            # Dívida média (proxy simples)
-            div_media = div_bruta
+            # Capital investido (proxy coerente com seu Fleuriet)
+            cr   = get_serie(bp_df, "Contas a Receber")
+            est  = get_serie(bp_df, "Estoques")
+            adi  = get_serie(bp_df, "Adiantamentos")
+            forn = get_serie(bp_df, "Fornecedores")
+            sal  = get_serie(bp_df, "Salários")
+            imp  = get_serie(bp_df, "Impostos e Encargos Sociais")
+            anc  = get_serie(bp_df, "Ativo Não Circulante")
 
-            # -----------------------------
-            # Custo da Dívida (input)
-            # -----------------------------
-            kd = st.number_input(
-                "Custo médio da dívida (Kd) % a.a.",
-                value=12.0,
-                step=0.1
-            ) / 100
+            acc = cr + est + adi
+            pcc = forn + sal + imp
+            iog = acc - pcc
 
-            # -----------------------------
-            # Cálculo Ke (CAPM)
-            # -----------------------------
-            ke = rf + beta * premio
-
-            # -----------------------------
-            # Pesos de capital
-            # -----------------------------
-            d = div_bruta
-            e = pl
-            total_cap = d + e
-
-            peso_d = safe_div(d.values, total_cap.values)
-            peso_e = safe_div(e.values, total_cap.values)
+            # NOPAT e ROIC
+            nopat = ebit * (1.0 - tax)
+            cap_inv = iog + anc
+            roic = safe_div(nopat, cap_inv) * 100.0  # em %
 
             # -----------------------------
-            # WACC
+            # WACC por ano
             # -----------------------------
-            wacc = ke * peso_e + kd * (1 - ir) * peso_d
+            ke = (rf + beta * mrp) * 100.0           # Ke em %
+            kd_after = (kd * (1.0 - tax)) * 100.0    # Kd pós-IR em %
+
+            # pesos por ano (como Series indexada por "Ano i")
+            w_d = pd.Series(index=anos_ok, dtype=float)
+            w_e = pd.Series(index=anos_ok, dtype=float)
+            wacc = pd.Series(index=anos_ok, dtype=float)
+
+            for a in anos_ok:
+                d = float(debt[a])
+                e = float(equity[a])
+                tot = d + e
+
+                if tot == 0:
+                    w_d[a] = np.nan
+                    w_e[a] = np.nan
+                    wacc[a] = np.nan
+                else:
+                    w_d[a] = (d / tot) * 100.0
+                    w_e[a] = (e / tot) * 100.0
+                    wacc[a] = ke * (w_e[a] / 100.0) + kd_after * (w_d[a] / 100.0)
+
 
             # -----------------------------
-            # ROIC (já calculado antes)
+            # Tabela (invertida: anos como colunas)
             # -----------------------------
-            roic = st.session_state.get("roic_serie")
+            # Monta DF com anos nas linhas e depois transpõe
+            df_wacc = pd.DataFrame(index=anos_ok)
+            df_wacc["Dívida Bruta"] = [float(debt[a]) for a in anos_ok]
+            df_wacc["Patrimônio Líquido"] = [float(equity[a]) for a in anos_ok]
+            df_wacc["Peso Dívida (%)"] = [float(w_d[a]) if pd.notna(w_d[a]) else np.nan for a in anos_ok]
+            df_wacc["Peso PL (%)"] = [float(w_e[a]) if pd.notna(w_e[a]) else np.nan for a in anos_ok]
+            df_wacc["Ke (%)"] = ke
+            df_wacc["Kd pós-IR (%)"] = kd_after
+            df_wacc["WACC (%)"] = [float(wacc[a]) if pd.notna(wacc[a]) else np.nan for a in anos_ok]
+            
+            # --- Garantir ROIC como Series indexada por anos_ok (evita IndexError quando roic vira ndarray) ---
+            if isinstance(roic, pd.Series):
+                roic_s = roic.reindex(anos_ok).astype(float)
+            else:
+                # tenta interpretar como lista/ndarray na mesma ordem de anos_ok
+                try:
+                    roic_s = pd.Series(list(roic), index=anos_ok, dtype=float)
+                except Exception:
+                    roic_s = pd.Series({a: np.nan for a in anos_ok}, dtype=float)
 
-            # -----------------------------
-            # DataFrame final
-            # -----------------------------
-            df_wacc = pd.DataFrame({
-                "Dívida Bruta": div_bruta,
-                "Patrimônio Líquido": pl,
-                "Peso Dívida (%)": peso_d * 100,
-                "Peso PL (%)": peso_e * 100,
-                "Ke (%)": ke * 100,
-                "Kd pós-IR (%)": kd * (1 - ir) * 100,
-                "WACC (%)": wacc * 100,
-            }, index=anos)
+            df_wacc["ROIC (%)"] = [float(roic_s[a]) if pd.notna(roic_s[a]) else np.nan for a in anos_ok]
+            df_wacc["Spread (ROIC - WACC) p.p."] = df_wacc["ROIC (%)"] - df_wacc["WACC (%)"]
+
+            # Inverte: linhas = métricas, colunas = anos
+            df_wacc_t = df_wacc.T
+            df_wacc_t.columns = anos_ok
+
+            # Formatação
+            fmt = {}
+            for a in anos_ok:
+                fmt[a] = lambda v: "" if (v is None or (isinstance(v, float) and np.isnan(v))) else f"{v:,.2f}"
+
+            # Ajustes por métrica
+            def fmt_money(v):
+                if v is None or (isinstance(v, float) and np.isnan(v)): return ""
+                return f"R$ {v:,.0f}"
+
+            def fmt_pct(v):
+                if v is None or (isinstance(v, float) and np.isnan(v)): return ""
+                return f"{v:,.2f}%"
+
+            def fmt_pp(v):
+                if v is None or (isinstance(v, float) and np.isnan(v)): return ""
+                return f"{v:+.2f} p.p."
+
+            format_dict = {}
+            for idx in df_wacc_t.index:
+                if idx in ["Dívida Bruta", "Patrimônio Líquido"]:
+                    format_dict[idx] = fmt_money
+                elif "p.p." in idx:
+                    format_dict[idx] = fmt_pp
+                else:
+                    format_dict[idx] = fmt_pct if ("%" in idx) else (lambda v: f"{v:,.2f}" if pd.notna(v) else "")
+
+            # Altura exata (evita “linhas vazias” visuais)
+            altura = min(520, 40 + 32 * (len(df_wacc_t) + 1))
 
             st.dataframe(
-                df_wacc.style.format({
-                    a: "{:,.2f}" for a in anos
-                }),
+                df_wacc_t.style.format(format_dict, subset=pd.IndexSlice[:, anos_ok]),
                 use_container_width=True,
-                height=520
+                height=altura
             )
 
             st.divider()
 
             # -----------------------------
-            # Criação de valor
+            # Gráfico (anos no eixo X)
             # -----------------------------
-            st.markdown("### 🧠 Criação de Valor")
+            st.markdown("### 📈 WACC vs ROIC (e Spread)")
 
-            if roic is not None:
-                spread = roic - (wacc * 100)
+            x = anos_ok
+            y_wacc = [float(df_wacc.loc[a, "WACC (%)"]) if pd.notna(df_wacc.loc[a, "WACC (%)"]) else np.nan for a in x]
+            y_roic = [float(df_wacc.loc[a, "ROIC (%)"]) if pd.notna(df_wacc.loc[a, "ROIC (%)"]) else np.nan for a in x]
+            y_spread = [float(df_wacc.loc[a, "Spread (ROIC - WACC) p.p."]) if pd.notna(df_wacc.loc[a, "Spread (ROIC - WACC) p.p."]) else np.nan for a in x]
 
-                df_valor = pd.DataFrame({
-                    "ROIC (%)": roic,
-                    "WACC (%)": wacc * 100,
-                    "Spread ROIC − WACC (p.p.)": spread,
-                }, index=anos)
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=x, y=y_wacc, mode="lines+markers", name="WACC (%)"))
+            fig.add_trace(go.Scatter(x=x, y=y_roic, mode="lines+markers", name="ROIC (%)"))
+            fig.add_trace(go.Scatter(x=x, y=y_spread, mode="lines+markers", name="Spread (p.p.)"))
 
-                st.dataframe(
-                    df_valor.style.format({
-                        a: "{:,.2f}" for a in anos
-                    }),
-                    use_container_width=True,
-                    height=420
-                )
+            fig.update_layout(
+                height=480,
+                xaxis_title="Período",
+                yaxis_title="%",
+                legend_title="Séries",
+                margin=dict(l=10, r=10, t=10, b=10)
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+            st.divider()
+
+            # -----------------------------
+            # Criação de valor (mensagem)
+            # -----------------------------
+            # Se ROIC estiver todo NaN (ex.: capital investido zero), avisa corretamente.
+            if np.all(np.isnan(np.array(y_roic, dtype=float))):
+                st.info("ROIC não disponível para comparação (capital investido ficou 0 ou dados insuficientes nos itens do BP para IOG/ANC).")
             else:
-                st.info("ROIC não disponível para comparação.")
+                # Usa último ano com valores válidos
+                last_valid = None
+                for a in reversed(x):
+                    r = df_wacc.loc[a, "ROIC (%)"]
+                    w = df_wacc.loc[a, "WACC (%)"]
+                    if pd.notna(r) and pd.notna(w):
+                        last_valid = a
+                        break
 
+                if last_valid is None:
+                    st.info("ROIC/WACC não disponíveis no mesmo período para comparação.")
+                else:
+                    spread_last = float(df_wacc.loc[last_valid, "Spread (ROIC - WACC) p.p."])
+                    if spread_last >= 0:
+                        st.success(f"No **{last_valid}**, a empresa cria valor: **ROIC - WACC = {spread_last:+.2f} p.p.**")
+                    else:
+                        st.warning(f"No **{last_valid}**, a empresa destrói valor: **ROIC - WACC = {spread_last:+.2f} p.p.**")
