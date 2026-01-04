@@ -695,7 +695,7 @@ def delta(df: pd.DataFrame, conta: str, ano_atual: str, ano_anterior: str) -> fl
 # =========================================================
 # TABS
 # =========================================================
-tab1, tab2, tab3, tab4 = st.tabs(["📥 Banco de Dados", "📈 Análises Financeiras", "Matriz do Caixa", "Simulações"])
+tab1, tab2, tab3, tab4 = st.tabs(["📥 Banco de Dados", "📈 Análises Financeiras", "🧩 Matriz do Caixa", "🧪 Simulações"])
 
 # =========================================================
 # TAB 1 — BANCO DE DADOS
@@ -751,6 +751,19 @@ with tab1:
             for a in anos:
                 df[a] = ""
             st.session_state["dre_raw"] = df
+        if not isinstance(st.session_state["dre_raw"], pd.DataFrame):
+            try:
+                st.session_state["dre_raw"] = pd.DataFrame(st.session_state["dre_raw"])
+            except Exception:
+                df = pd.DataFrame({"Conta": dre_contas})
+                for a in anos:
+                    df[a] = ""
+                st.session_state["dre_raw"] = df
+        if st.session_state["dre_raw"].empty:
+            df = pd.DataFrame({"Conta": dre_contas})
+            for a in anos:
+                df[a] = ""
+            st.session_state["dre_raw"] = df
 
         # Editor (NUNCA converter antes)
         dre_raw = st.data_editor(
@@ -758,6 +771,7 @@ with tab1:
             disabled=["Conta"],
             num_rows="fixed",
             use_container_width=True,
+            height=altura_dataframe(st.session_state["dre_raw"]),
             key="dre_editor"
         )
         st.session_state["dre_raw"] = dre_raw.copy()
@@ -779,6 +793,7 @@ with tab1:
             disabled=["Conta"],
             num_rows="fixed",
             use_container_width=True,
+            height=altura_dataframe(st.session_state["dre_override"].reset_index()),
             key="dre_override_editor"
         ).set_index("Conta")
 
@@ -835,12 +850,26 @@ with tab1:
             for a in anos:
                 df[a] = ""
             st.session_state["bp_raw"] = df
+        if not isinstance(st.session_state["bp_raw"], pd.DataFrame):
+            try:
+                st.session_state["bp_raw"] = pd.DataFrame(st.session_state["bp_raw"])
+            except Exception:
+                df = pd.DataFrame({"Conta": balanco_contas})
+                for a in anos:
+                    df[a] = ""
+                st.session_state["bp_raw"] = df
+        if st.session_state["bp_raw"].empty:
+            df = pd.DataFrame({"Conta": balanco_contas})
+            for a in anos:
+                df[a] = ""
+            st.session_state["bp_raw"] = df
 
         bp_raw = st.data_editor(
             st.session_state["bp_raw"],
             disabled=["Conta"],
             num_rows="fixed",
             use_container_width=True,
+            height=altura_dataframe(st.session_state["bp_raw"]),
             key="bp_editor"
         )
         st.session_state["bp_raw"] = bp_raw.copy()
@@ -861,6 +890,7 @@ with tab1:
             disabled=["Conta"],
             num_rows="fixed",
             use_container_width=True,
+            height=altura_dataframe(st.session_state["bp_override"].reset_index()),
             key="bp_override_editor"
         ).set_index("Conta")
 
@@ -2002,3 +2032,362 @@ with tab2:
                         st.success(f"No **{last_valid}**, a empresa cria valor: **ROIC - WACC = {spread_last:+.2f} p.p.**")
                     else:
                         st.warning(f"No **{last_valid}**, a empresa destrói valor: **ROIC - WACC = {spread_last:+.2f} p.p.**")
+
+
+# =========================================================
+# TAB 3 — MATRIZ DO CAIXA (OPERACIONAL) — QUINZENAL
+# =========================================================
+with tab3:
+    st.subheader("🧩 Matriz do Caixa — Exposição Máxima de Capital de Giro (Ciclo Operacional)")
+    st.caption("Matriz quinzenal baseada em CMV como origem do ciclo. Considera ativos e passivos cíclicos; salários+impostos pagos 1x/mês (a cada 2 quinzenas).")
+
+    dre_df = st.session_state.get("dre_df")
+    bp_df  = st.session_state.get("balanco_df")
+
+    if dre_df is None or bp_df is None or dre_df.empty or bp_df.empty:
+        st.warning("Preencha DRE e Balanço na aba 'Banco de Dados' para habilitar a Matriz do Caixa.")
+    else:
+        # -----------------------------
+        # Helpers locais (não altera seus globais)
+        # -----------------------------
+        def _conta_col(df):
+            return df["Conta"].astype(str).map(conta_limpa)
+
+        def get_serie_local(df, conta):
+            s = _conta_col(df)
+            mask = (s == conta)
+            if not mask.any():
+                return pd.Series({a: 0.0 for a in anos})
+            out = df.loc[mask, anos].iloc[0]
+            return pd.to_numeric(out, errors="coerce").fillna(0.0)
+
+        def safe_div_scalar(n, d):
+            try:
+                n = float(n); d = float(d)
+                return np.nan if d == 0 else n/d
+            except Exception:
+                return np.nan
+
+        def ceil_quinzena(dias):
+            # converte dias -> número de quinzenas (arredonda para cima)
+            try:
+                dias = float(dias)
+            except Exception:
+                dias = 0.0
+            return int(np.ceil(max(0.0, dias) / 15.0))
+
+        # -----------------------------
+        # Seleção do ano de referência
+        # -----------------------------
+        # Usa anos_ok (já calculado no tab2). Se não existir por algum motivo, usa anos completo.
+        anos_ok_local = anos_ok if "anos_ok" in locals() and len(anos_ok) > 0 else anos[:]
+        ano_ref = st.selectbox("Período de referência", options=anos_ok_local, index=len(anos_ok_local)-1)
+
+        # -----------------------------
+        # Inputs dos prazos (dias)
+        # (Se você já tem PMR/PME/PMP calculados e armazenados, pode ligar aqui.
+        #  Por enquanto, input explícito deixa a matriz independente e previsível.)
+        # -----------------------------
+        c_prazos1, c_prazos2, c_prazos3 = st.columns(3)
+        with c_prazos1:
+            pmr_d = st.number_input("PMR (dias)", value=35.0, step=1.0)
+        with c_prazos2:
+            pme_d = st.number_input("PME (dias)", value=96.0, step=1.0)
+        with c_prazos3:
+            pmp_d = st.number_input("PMP (dias)", value=57.0, step=1.0)
+
+        pmr_q = ceil_quinzena(pmr_d)
+        pme_q = ceil_quinzena(pme_d)
+        pmp_q = ceil_quinzena(pmp_d)
+
+        ciclo_oper_q = pmr_q + pme_q
+        ciclo_fin_q  = max(0, ciclo_oper_q - pmp_q)  # apenas referência; matriz é operacional
+
+        st.caption(f"Conversão para quinzena (≈15 dias): PME={pme_q}q, PMR={pmr_q}q, PMP={pmp_q}q | Ciclo Operacional={ciclo_oper_q}q | Ciclo Financeiro={ciclo_fin_q}q")
+
+        st.divider()
+
+        # -----------------------------
+        # Séries contábeis (ano_ref)
+        # -----------------------------
+        receita = float(get_serie_local(dre_df, "Receita Líquida").get(ano_ref, 0.0))
+        cmv_abs = float(get_serie_local(dre_df, "CMV, CPV ou CSP").abs().get(ano_ref, 0.0))
+
+        cr   = float(get_serie_local(bp_df, "Contas a Receber").get(ano_ref, 0.0))
+        est  = float(get_serie_local(bp_df, "Estoques").get(ano_ref, 0.0))
+        adi  = float(get_serie_local(bp_df, "Adiantamentos").get(ano_ref, 0.0))
+
+        forn = float(get_serie_local(bp_df, "Fornecedores").get(ano_ref, 0.0))
+        sal  = float(get_serie_local(bp_df, "Salários").get(ano_ref, 0.0))
+        imp  = float(get_serie_local(bp_df, "Impostos e Encargos Sociais").get(ano_ref, 0.0))
+
+        # Ativos e passivos cíclicos (como você definiu antes)
+        incluir_adi = st.checkbox("Incluir Adiantamentos no ACC", value=True)
+        acc_val = cr + est + (adi if incluir_adi else 0.0)
+        pcc_val = forn + sal + imp
+        iog_val = acc_val - pcc_val
+
+        c1, c2, c3 = st.columns(3)
+        c1.metric("ACC (R$)", f"R$ {acc_val:,.0f}".replace(",", "."))
+        c2.metric("PCC (R$)", f"R$ {pcc_val:,.0f}".replace(",", "."))
+        c3.metric("IOG (R$)", f"R$ {iog_val:,.0f}".replace(",", "."))
+
+        st.divider()
+
+        # -----------------------------
+        # Matriz Operacional (quinzenal) — CMV como origem
+        # -----------------------------
+        # Ideia:
+        # - cada "coorte" de compra (CMV) nasce na quinzena t
+        # - fica "presa" em estoque por pme_q
+        # - depois vira CR por pmr_q
+        # - o financiamento por fornecedores atua até pmp_q
+        # - salários+impostos: descarga mensal (a cada 2 quinzenas), aproximada como parcelas iguais no horizonte
+
+        # Horizonte mínimo para visualizar bem (1 ciclo operacional + folga)
+        horizon_q = max(8, ciclo_oper_q + 6)  # você pode ajustar
+        quinz = list(range(1, horizon_q + 1))
+
+        # Volume de CMV por quinzena (origem)
+        # Ano contábil -> 24 quinzenas/ano. Se faltarem dados, cai para 0.
+        cmv_por_q = cmv_abs / 24.0 if cmv_abs else 0.0
+
+        # Percentuais de entrada (sem parcelamento) — você comentou que isso é interessante
+        # Aqui aplicamos na compra (fornecedor) e na venda (cliente)
+        cc1, cc2 = st.columns(2)
+        with cc1:
+            pct_entrada_compra = st.slider("% entrada na compra (fornecedor)", 0.0, 100.0, 0.0, 1.0) / 100.0
+        with cc2:
+            pct_entrada_venda = st.slider("% entrada na venda (cliente)", 0.0, 100.0, 0.0, 1.0) / 100.0
+
+        # Para manter coerência, se há entrada na venda, reduz o CR "final" associado às vendas futuras.
+        # (modelo simples e transparente)
+
+        # Componentes unitários por coorte (baseados na estrutura do BP)
+        # Proporção do ACC em relação ao "nível operacional" (cmv/receita ajuda a calibrar, mas pode ser ruim se receita=0)
+        # Aqui usamos o próprio BP como tamanho-alvo; a matriz é exposição, então é razoável distribuir o ACC/PCC pelo ciclo.
+        # Parte do ACC que é estoque vs CR (usamos peso do BP)
+        acc_component = est + cr + (adi if incluir_adi else 0.0)
+        w_est = safe_div_scalar(est, acc_component) if acc_component else np.nan
+        w_cr  = safe_div_scalar(cr,  acc_component) if acc_component else np.nan
+        w_adi = safe_div_scalar((adi if incluir_adi else 0.0), acc_component) if acc_component else np.nan
+
+        if not np.isfinite(w_est): w_est = 0.5
+        if not np.isfinite(w_cr):  w_cr  = 0.5
+        if not np.isfinite(w_adi): w_adi = 0.0
+
+        # Passivos cíclicos: fornecedores vs (sal+imp)
+        pcc_component = forn + sal + imp
+        w_forn = safe_div_scalar(forn, pcc_component) if pcc_component else np.nan
+        w_folha = safe_div_scalar((sal + imp), pcc_component) if pcc_component else np.nan
+
+        if not np.isfinite(w_forn):  w_forn = 0.6
+        if not np.isfinite(w_folha): w_folha = 0.4
+
+        # Matrizes: linhas = coortes (1..horizon), colunas = quinzenas (1..horizon)
+        # Valores: exposição incremental da coorte na quinzena
+        M = np.zeros((horizon_q, horizon_q), dtype=float)
+
+        for t0 in range(1, horizon_q + 1):
+            # Tamanho do "lote" operacional por coorte
+            lote = cmv_por_q
+
+            # 1) Estoque (usa caixa): do t0 até t0+pme_q-1
+            # (parcela de estoque + adiantamentos)
+            est_val = lote * w_est
+            adi_val = lote * w_adi
+            for t in range(t0, min(horizon_q, t0 + pme_q - 1) + 1):
+                M[t0-1, t-1] += (est_val + adi_val)
+
+            # 2) CR (usa caixa): após PME, entra em CR por PMR
+            cr_val = lote * w_cr
+            # entrada na venda reduz CR final (modelo simples)
+            cr_val = cr_val * (1.0 - pct_entrada_venda)
+
+            cr_ini = t0 + pme_q
+            cr_fim = t0 + pme_q + pmr_q - 1
+            for t in range(cr_ini, min(horizon_q, cr_fim) + 1):
+                M[t0-1, t-1] += cr_val
+
+            # 3) Fornecedores (financia): reduz exposição até PMP
+            # entrada na compra antecipa pagamento (reduz fornecedor financiando)
+            forn_val = lote * w_forn
+            # parte paga à vista na compra => não financia, então não entra como "redução" ao longo
+            forn_val_fin = forn_val * (1.0 - pct_entrada_compra)
+
+            forn_ini = t0
+            forn_fim = t0 + pmp_q - 1
+            for t in range(forn_ini, min(horizon_q, forn_fim) + 1):
+                M[t0-1, t-1] -= forn_val_fin
+
+            # 4) Salários + Impostos (financia parcialmente? na prática é obrigação, então "reduz caixa" no pagamento)
+            # Para matriz de exposição, a forma mais clara é:
+            # - não reduzir exposição "todo dia", e sim colocar "descargas" mensais.
+            # Aqui vamos modelar como pagamentos mensais (a cada 2 quinzenas), distribuídos pelo horizonte,
+            # proporcional ao lote e ao peso folha.
+            folha_val = lote * w_folha
+
+            # Pagamento mensal: ocorre em quinzena par (2,4,6,...)
+            # Começa 1 mês após origem (t0+1) para evitar pagar antes de existir operação.
+            # Ajuste simples e transparente.
+            for t in range(2, horizon_q + 1, 2):
+                if t >= t0 + 1:
+                    # descarga: aumenta exposição (paga => precisa de caixa)
+                    # para manter consistência com "PCC" como fonte, aqui tratamos folha como "passivo cíclico"
+                    # e portanto NEGATIVA enquanto não paga. Como não estamos acumulando passivo de folha ao longo,
+                    # fazemos a aproximação: parte da folha reduz exposição no intervalo e volta no pagamento.
+                    # Simplificação: reduz por 2 quinzenas e volta no t par.
+                    # (Se quiser, depois refinamos com calendário específico.)
+                    t_ini = max(t-1, t0)
+                    t_fim = min(t, horizon_q)
+                    # "financiamento" no intervalo
+                    M[t0-1, t_ini-1] -= folha_val
+                    # pagamento no t (reverte)
+                    M[t0-1, t_fim-1] += folha_val
+
+        # Exposição total por quinzena (soma das coortes)
+        expos_q = M.sum(axis=0)
+        expo_max = float(np.nanmax(expos_q))
+        t_pico = int(np.nanargmax(expos_q) + 1)
+
+        st.markdown("### Debug — Sensibilidade dos parâmetros")
+
+        st.write("pct_entrada_compra =", pct_entrada_compra, "| pct_entrada_venda =", pct_entrada_venda)
+
+        # Mostra estatísticas básicas da matriz
+        st.write("M min/max:", float(np.nanmin(M)), float(np.nanmax(M)))
+        st.write("Soma total de M (deveria tender a 0 se fechou o ciclo):", float(np.nansum(M)))
+
+        # fluxo e saldo
+        fluxo_q = np.nansum(M, axis=0)
+        saldo_acum = np.cumsum(fluxo_q)
+
+        st.write("Fluxo por quinzena (primeiras 8):", [float(v) for v in fluxo_q[:8]])
+        st.write("Saldo acumulado (primeiras 8):", [float(v) for v in saldo_acum[:8]])
+        st.write("Pico uso (min saldo):", float(np.nanmin(saldo_acum)))
+
+
+    
+        # -----------------------------
+        # Visualizações
+        # -----------------------------
+        st.markdown("### Heatmap — Exposição por coorte (quinzenas)")
+        st.caption("Linhas = coortes de CMV (início da compra). Colunas = quinzenas. Valores positivos indicam necessidade (uso); negativos indicam financiamento operacional.")
+
+        # ===== AJUSTE DE VISUAL (cores + zero + escala simétrica) =====
+        colorscale_divergente = [
+            [0.00, "#2166ac"],  # azul escuro (negativo forte = financiamento)
+            [0.45, "#d1e5f0"],  # azul claro
+            [0.50, "#ffffff"],  # branco (zero)
+            [0.55, "#fddbc7"],  # vermelho claro
+            [1.00, "#b2182b"],  # vermelho escuro (positivo forte = necessidade)
+        ]
+
+        # garante escala simétrica em torno do zero (melhora MUITO a leitura)
+        M_np = np.asarray(M, dtype=float)
+        absmax = float(np.nanmax(np.abs(M_np))) if np.isfinite(np.nanmax(np.abs(M_np))) else 1.0
+        zmin, zmax = -absmax, absmax
+
+        x_labels = [f"Q{t}" for t in quinz]
+        y_labels = [f"Coorte Q{t}" for t in quinz]
+
+        fig_hm = go.Figure(data=go.Heatmap(
+            z=M,
+            x=x_labels,
+            y=y_labels,
+            colorscale=colorscale_divergente,
+            zmid=0,           # ancora o zero no branco
+            zmin=zmin,        # escala simétrica
+            zmax=zmax,
+            colorbar=dict(
+                title="Exposição (R$)",
+                tickformat=",.0f"
+            ),
+            hovertemplate=(
+                "<b>%{y}</b> → %{x}<br>"
+                "Exposição: <b>R$ %{z:,.0f}</b><br>"
+                "<span style='font-size:12px'>"
+                "Positivo = uso (necessidade de capital)<br>"
+                "Negativo = fonte (financiamento operacional)"
+                "</span>"
+                "<extra></extra>"
+            )
+        ))
+
+        # melhora margens/topo (evita sensação de “apertado”)
+        fig_hm.update_layout(
+            height=560,
+            margin=dict(l=10, r=10, t=30, b=10)
+        )
+
+        st.plotly_chart(fig_hm, use_container_width=True)
+
+        st.divider()
+
+        # -----------------------------
+        # Curva — SALDO ACUMULADO (estoque de caixa necessário)
+        # -----------------------------
+        st.markdown("### Curva — Saldo acumulado do ciclo (identifica o pico de uso do caixa)")
+        st.caption("Aqui o gráfico mostra o *estoque* de caixa ao longo das quinzenas (cumulativo). O pico de necessidade é o menor saldo (mais negativo).")
+
+        # 1) fluxo por quinzena = soma das coortes (colunas da matriz)
+        fluxo_q = np.nansum(M, axis=0)  # shape (len(quinz),)
+
+        # 2) saldo acumulado (começa em 0)
+        saldo_acum = np.cumsum(fluxo_q)
+
+        # 3) pico de uso de caixa = menor saldo (mais negativo)
+        t_min = int(np.nanargmin(saldo_acum))  # índice
+        saldo_min = float(saldo_acum[t_min])
+        uso_max = -saldo_min if saldo_min < 0 else 0.0
+        q_pico = quinz[t_min]
+
+        fig_saldo = go.Figure()
+
+        # linha do saldo acumulado
+        fig_saldo.add_trace(go.Scatter(
+            x=[f"Q{t}" for t in quinz],
+            y=[float(v) for v in saldo_acum],
+            mode="lines+markers",
+            name="Saldo acumulado (R$)"
+        ))
+
+        # destaca o ponto de pico (mínimo)
+        fig_saldo.add_trace(go.Scatter(
+            x=[f"Q{q_pico}"],
+            y=[saldo_min],
+            mode="markers+text",
+            text=[f"Pico uso: R$ {uso_max:,.0f}".replace(",", ".")],
+            textposition="top center",
+            marker=dict(size=10),
+            showlegend=False
+        ))
+
+        # linha zero para referência
+        fig_saldo.add_hline(y=0, line_width=1)
+
+        fig_saldo.update_layout(
+            height=420,
+            margin=dict(l=10, r=10, t=10, b=10),
+            xaxis_title="Quinzena",
+            yaxis_title="R$ (saldo acumulado)"
+        )
+
+        st.plotly_chart(fig_saldo, use_container_width=True)
+
+        st.success(
+            f"Pico de necessidade de caixa no ciclo: **R$ {uso_max:,.0f}** na **Q{q_pico}** (saldo mínimo = {saldo_min:,.0f})."
+            .replace(",", ".")
+        )
+
+
+        st.divider()
+
+        st.markdown("### Parâmetros usados (transparência do modelo)")
+        df_params = pd.DataFrame({
+            "Parâmetro": ["PME (q)", "PMR (q)", "PMP (q)", "Ciclo Operacional (q)", "CMV por quinzena", "% entrada compra", "% entrada venda"],
+            "Valor": [pme_q, pmr_q, pmp_q, ciclo_oper_q, cmv_por_q, pct_entrada_compra*100, pct_entrada_venda*100]
+        })
+        st.dataframe(df_params, use_container_width=True, hide_index=True)
+
+
