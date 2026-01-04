@@ -2226,6 +2226,7 @@ with tab3:
             # Aqui vamos modelar como pagamentos mensais (a cada 2 quinzenas), distribuídos pelo horizonte,
             # proporcional ao lote e ao peso folha.
             folha_val = lote * w_folha
+            
 
             # Pagamento mensal: ocorre em quinzena par (2,4,6,...)
             # Começa 1 mês após origem (t0+1) para evitar pagar antes de existir operação.
