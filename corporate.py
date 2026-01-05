@@ -1263,6 +1263,7 @@ with tab2:
             indic["Margem EBIT (%)"]    = safe_div(ebit, receita) * 100.0
             indic["Margem EBITDA (%)"]  = safe_div(ebitda, receita) * 100.0
             indic["Margem Líquida (%)"] = safe_div(lucroliq, receita) * 100.0
+            indic["NOPAT (R$)"]           = pd.Series({a: float(ebit[a]) * (1 - ir_eff) for a in anos_ok})
 
             # Endividamento
             indic["Dívida Total / PL (x)"]       = safe_div(div_total, pl)
@@ -1283,6 +1284,7 @@ with tab2:
 
             # Avançados pedidos
             indic["FCO / Dívida Líquida (%)"]    = safe_div(fco, div_liq) *100.0
+            indic["FCO / Dívida de Curto Prazo (%)"] = safe_div(fco, div_cp) *100.0
             indic["FCO / Receita Líquida (%)"]   = safe_div(fco, receita) *100.0
             indic["ROIC (%)"]                   = roic
             indic["ROE (%)"]                   = safe_div(lucroliq, pl) *100.0
