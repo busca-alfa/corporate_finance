@@ -641,6 +641,32 @@ def consolidar_bp_com_override(bp_df: pd.DataFrame, override_df: pd.DataFrame) -
             else:
                 df_idx.loc[total, a] = auto
 
+    # Totais e checagem (sempre calculados a partir dos subtotais já consolidados)
+    total_ativo = "Ativo Total"
+    total_passivo = "Passivo Total"
+    check_nome = "CHECK"
+
+    for a in anos:
+        ativo_val = 0.0
+        passivo_val = 0.0
+
+        if "Ativo Circulante" in df_idx.index and "Ativo Não Circulante" in df_idx.index:
+            ativo_val = float(df_idx.loc["Ativo Circulante", a]) + float(df_idx.loc["Ativo Não Circulante", a])
+
+        if "Passivo Circulante" in df_idx.index and "Passivo Não Circulante" in df_idx.index and "Patrimônio Líquido" in df_idx.index:
+            passivo_val = (
+                float(df_idx.loc["Passivo Circulante", a])
+                + float(df_idx.loc["Passivo Não Circulante", a])
+                + float(df_idx.loc["Patrimônio Líquido", a])
+            )
+
+        if total_ativo in df_idx.index:
+            df_idx.loc[total_ativo, a] = ativo_val
+        if total_passivo in df_idx.index:
+            df_idx.loc[total_passivo, a] = passivo_val
+        if check_nome in df_idx.index:
+            df_idx.loc[check_nome, a] = ativo_val - passivo_val
+
     return df_idx.reset_index()
 
 
@@ -826,6 +852,7 @@ with tab1:
             "Intangível",
             "Propriedades para Investimentos",
             "Ativo Não Circulante",
+            "Ativo Total",
             " ",
             "Empréstimos e Financiamentos (CP)",
             "Fornecedores",
@@ -843,6 +870,9 @@ with tab1:
             "Reserva de Lucros",
             "Resultados Acumulados",
             "Patrimônio Líquido",
+            "Passivo Total",
+            " ",
+            "CHECK",
         ]
 
         if "bp_raw" not in st.session_state:
@@ -934,9 +964,12 @@ with tab1:
         contas_consolidadoras_bp_view = [
             "Ativo Circulante",
             "Ativo Não Circulante",
+            "Ativo Total",
             "Passivo Circulante",
             "Passivo Não Circulante",
             "Patrimônio Líquido",
+            "Passivo Total",
+            "CHECK",
         ]
 
         def destacar_bp(df):
@@ -953,8 +986,74 @@ with tab1:
         st.markdown("### Balanço Patrimonial — Estrutura (com consolidação automática)")
 
         df_bp_view = st.session_state.get("balanco_df", pd.DataFrame(columns=["Conta"] + anos))
+        base_bp_ref = st.selectbox(
+            "Base do percentual (BP)",
+            ["Ativo total", "Conta-mãe (grupo)"],
+            index=0,
+            key="bp_base_ref"
+        )
+
+        df_bp_num = _to_num(df_bp_view, anos)
+
+        total_ativo = pd.Series({a: get_val(df_bp_num, "Ativo Total", a) for a in anos})
+        if float(total_ativo.abs().sum()) == 0.0:
+            total_ativo = pd.Series({a: get_val(df_bp_num, "Ativo Circulante", a) + get_val(df_bp_num, "Ativo Não Circulante", a) for a in anos})
+
+        grupos_totais = {conta_limpa(c) for c in contas_consolidadoras_bp_view}
+        grupo_por_idx = {}
+        buffer_idxs = []
+
+        for idx, row in df_bp_view.iterrows():
+            conta_raw = row.get("Conta", "")
+            conta = conta_limpa(conta_raw)
+            if conta.strip() == "":
+                buffer_idxs = []
+                continue
+            buffer_idxs.append(idx)
+            if conta in grupos_totais:
+                for i in buffer_idxs:
+                    grupo_por_idx[i] = conta
+                buffer_idxs = []
+
+        def _bar_text(valor, pct, width=12):
+            try:
+                v = float(valor)
+            except Exception:
+                return ""
+            if pct is None or np.isnan(pct):
+                return f"R$ {v:,.0f}"
+            pct_clamped = max(0.0, min(float(pct), 1.0))
+            filled = int(round(width * pct_clamped))
+            bar = "[" + ("=" * filled) + ("-" * (width - filled)) + "]"
+            return f"R$ {v:,.0f} {bar} {pct * 100:,.1f}%"
+
+        df_bp_display = df_bp_view.copy()
+        for a in anos:
+            col_vals = []
+            for idx, row in df_bp_view.iterrows():
+                conta = conta_limpa(row.get("Conta", ""))
+                if conta.strip() == "":
+                    col_vals.append("")
+                    continue
+                if conta == "CHECK":
+                    try:
+                        v = float(df_bp_num.loc[idx, a]) if a in df_bp_num.columns else np.nan
+                        col_vals.append("" if np.isnan(v) else f"R$ {v:,.0f}")
+                    except Exception:
+                        col_vals.append("")
+                    continue
+                valor = df_bp_num.loc[idx, a] if a in df_bp_num.columns else np.nan
+                if base_bp_ref == "Ativo total":
+                    base = total_ativo.get(a, 0.0)
+                else:
+                    grupo = grupo_por_idx.get(idx)
+                    base = get_val(df_bp_num, grupo, a) if grupo else total_ativo.get(a, 0.0)
+                pct = np.nan if base == 0 else (float(valor) / float(base))
+                col_vals.append(_bar_text(valor, pct))
+            df_bp_display[a] = col_vals
+
         st.dataframe(
-            formatar_apenas_valores(destacar_bp(df_bp_view)),
+            destacar_bp(df_bp_display),
             use_container_width=True,
             height=altura_dataframe(df_bp_view)
         )
@@ -1122,6 +1221,10 @@ with tab2:
             return pd.to_numeric(out, errors="coerce").fillna(0.0)
 
         def safe_div(n, d):
+            if isinstance(n, pd.Series) or isinstance(d, pd.Series):
+                n = pd.Series(n, index=anos) if not isinstance(n, pd.Series) else n.reindex(anos)
+                d = pd.Series(d, index=anos) if not isinstance(d, pd.Series) else d.reindex(anos)
+                return n.divide(d.replace(0, np.nan))
             n = np.asarray(n, dtype=float)
             d = np.asarray(d, dtype=float)
             return np.where(d == 0, np.nan, n / d)
@@ -1292,7 +1395,12 @@ with tab2:
             # ----------------------------
             # Tabela (linhas = indicadores, colunas = anos_ok)
             # ----------------------------
-            df_ind = pd.DataFrame({k: v for k, v in indic.items()}).T
+            def _to_series_anos(v):
+                if isinstance(v, pd.Series):
+                    return v.reindex(anos)
+                return pd.Series(v, index=anos)
+
+            df_ind = pd.DataFrame({k: _to_series_anos(v) for k, v in indic.items()}).T
             df_ind = df_ind[anos_ok]
             df_ind.index.name = "Indicador"
 
