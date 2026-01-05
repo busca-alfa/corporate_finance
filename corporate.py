@@ -8,6 +8,7 @@ import re
 import io
 import zipfile
 from datetime import datetime
+import html
 
 DATA_DIR = Path("data_empresas")
 DATA_DIR.mkdir(exist_ok=True)
@@ -986,74 +987,8 @@ with tab1:
         st.markdown("### Balanço Patrimonial — Estrutura (com consolidação automática)")
 
         df_bp_view = st.session_state.get("balanco_df", pd.DataFrame(columns=["Conta"] + anos))
-        base_bp_ref = st.selectbox(
-            "Base do percentual (BP)",
-            ["Ativo total", "Conta-mãe (grupo)"],
-            index=0,
-            key="bp_base_ref"
-        )
-
-        df_bp_num = _to_num(df_bp_view, anos)
-
-        total_ativo = pd.Series({a: get_val(df_bp_num, "Ativo Total", a) for a in anos})
-        if float(total_ativo.abs().sum()) == 0.0:
-            total_ativo = pd.Series({a: get_val(df_bp_num, "Ativo Circulante", a) + get_val(df_bp_num, "Ativo Não Circulante", a) for a in anos})
-
-        grupos_totais = {conta_limpa(c) for c in contas_consolidadoras_bp_view}
-        grupo_por_idx = {}
-        buffer_idxs = []
-
-        for idx, row in df_bp_view.iterrows():
-            conta_raw = row.get("Conta", "")
-            conta = conta_limpa(conta_raw)
-            if conta.strip() == "":
-                buffer_idxs = []
-                continue
-            buffer_idxs.append(idx)
-            if conta in grupos_totais:
-                for i in buffer_idxs:
-                    grupo_por_idx[i] = conta
-                buffer_idxs = []
-
-        def _bar_text(valor, pct, width=12):
-            try:
-                v = float(valor)
-            except Exception:
-                return ""
-            if pct is None or np.isnan(pct):
-                return f"R$ {v:,.0f}"
-            pct_clamped = max(0.0, min(float(pct), 1.0))
-            filled = int(round(width * pct_clamped))
-            bar = "[" + ("=" * filled) + ("-" * (width - filled)) + "]"
-            return f"R$ {v:,.0f} {bar} {pct * 100:,.1f}%"
-
-        df_bp_display = df_bp_view.copy()
-        for a in anos:
-            col_vals = []
-            for idx, row in df_bp_view.iterrows():
-                conta = conta_limpa(row.get("Conta", ""))
-                if conta.strip() == "":
-                    col_vals.append("")
-                    continue
-                if conta == "CHECK":
-                    try:
-                        v = float(df_bp_num.loc[idx, a]) if a in df_bp_num.columns else np.nan
-                        col_vals.append("" if np.isnan(v) else f"R$ {v:,.0f}")
-                    except Exception:
-                        col_vals.append("")
-                    continue
-                valor = df_bp_num.loc[idx, a] if a in df_bp_num.columns else np.nan
-                if base_bp_ref == "Ativo total":
-                    base = total_ativo.get(a, 0.0)
-                else:
-                    grupo = grupo_por_idx.get(idx)
-                    base = get_val(df_bp_num, grupo, a) if grupo else total_ativo.get(a, 0.0)
-                pct = np.nan if base == 0 else (float(valor) / float(base))
-                col_vals.append(_bar_text(valor, pct))
-            df_bp_display[a] = col_vals
-
         st.dataframe(
-            destacar_bp(df_bp_display),
+            formatar_apenas_valores(destacar_bp(df_bp_view)),
             use_container_width=True,
             height=altura_dataframe(df_bp_view)
         )
@@ -1356,6 +1291,15 @@ with tab2:
                 cap_inv = float(iog[a]) + float(anc[a])
                 roic[a] = _safe_div_scalar(nopat, cap_inv) * 100.0
 
+            wacc_sess = st.session_state.get("wacc_series")
+            ke_pct = st.session_state.get("ke_pct")
+            if isinstance(wacc_sess, pd.Series):
+                wacc_pct_s = wacc_sess.reindex(anos_ok).astype(float)
+            else:
+                wacc_pct_s = pd.Series({a: np.nan for a in anos_ok}, dtype=float)
+            if ke_pct is None:
+                ke_pct = np.nan
+
             # ----------------------------
             # Indicadores (BÁSICOS + AVANÇADOS)
             # ----------------------------
@@ -1390,7 +1334,16 @@ with tab2:
             indic["FCO / Dívida de Curto Prazo (%)"] = safe_div(fco, div_cp) *100.0
             indic["FCO / Receita Líquida (%)"]   = safe_div(fco, receita) *100.0
             indic["ROIC (%)"]                   = roic
-            indic["ROE (%)"]                   = safe_div(lucroliq, pl) *100.0
+            roe = safe_div(lucroliq, pl) *100.0
+            indic["ROE (%)"]                   = roe
+            indic["EVA (R$)"]                   = pd.Series({
+                a: ((float(roic[a]) - float(wacc_pct_s[a])) / 100.0) * (float(pl[a]) + float(div_liq[a]))
+                for a in anos_ok
+            })
+            indic["VEA (R$)"]                   = pd.Series({
+                a: ((float(roe[a]) - float(ke_pct)) / 100.0) * float(pl[a])
+                for a in anos_ok
+            })
 
             # ----------------------------
             # Tabela (linhas = indicadores, colunas = anos_ok)
@@ -1446,7 +1399,7 @@ with tab2:
             st.dataframe(
                 df_ind_fmt,
                 use_container_width=True,
-                height=min(780, 40 + 32 * (len(df_ind_fmt) + 2))
+                height=altura_dataframe(df_ind_fmt)
             )
 
 
@@ -1506,59 +1459,389 @@ with tab2:
         # SUBABA 1 — Vertical & Horizontal
         # =================================================
         with sub_avah:
+
             st.markdown("### 📊 Análise Vertical e Horizontal")
 
             alvo = st.selectbox("Escolha a demonstração", ["DRE", "Balanço Patrimonial"], index=0)
 
             if alvo == "DRE":
+
                 df_base = dre_df.copy()
+
                 base_nome = "Receita Líquida"
+
                 base = get_serie(df_base, "Receita Líquida")
+
+                base_bp_ref = None
+
+                contas_bold = {
+
+                    "Receita Líquida",
+
+                    "Lucro Bruto",
+
+                    "Lucro Operacional - EBIT",
+
+                    "Lucro Antes do IR",
+
+                    "Lucro Líquido",
+
+                    "EBITDA",
+
+                }
+
             else:
+
                 df_base = bp_df.copy()
-                base_nome = "Ativo Total (AC + ANC)"
-                base = get_serie(df_base, "Ativo Circulante") + get_serie(df_base, "Ativo Não Circulante")
+
+                df_base = df_base[df_base["Conta"].astype(str).map(conta_limpa) != "CHECK"]
+
+                base_bp_ref = st.selectbox(
+
+                    "Base do percentual (BP)",
+
+                    ["Conta Global", "Conta Local (grupo)"],
+
+                    index=0,
+
+                    key="bp_base_ref_avah"
+
+                )
+
+                base_nome = "Conta Global (Ativo/Passivo)" if base_bp_ref == "Conta Global" else "Conta Local (grupo)"
+
+                base = None
+
+                contas_bold = {
+
+                    "Ativo Circulante",
+
+                    "Ativo Não Circulante",
+
+                    "Ativo Total",
+
+                    "Passivo Circulante",
+
+                    "Passivo Não Circulante",
+
+                    "Patrimônio Líquido",
+
+                    "Passivo Total",
+
+                }
 
             for a in anos:
+
                 df_base[a] = pd.to_numeric(df_base[a], errors="coerce").fillna(0.0)
 
+
+            def _fmt_rs(v):
+
+                try:
+
+                    return f"R$ {float(v):,.0f}"
+
+                except Exception:
+
+                    return ""
+
+
+            def _bar_cell_html(valor, pct, mode):
+
+                val_str = _fmt_rs(valor)
+
+                if pct is None or np.isnan(pct):
+
+                    return f"<div class='avah-cell'><div class='avah-value'>{val_str}</div></div>"
+
+                if mode == "ratio":
+
+                    pct_label = f"{pct * 100:,.1f}%"
+
+                    width = min(abs(float(pct)) * 100.0, 100.0)
+
+                else:
+
+                    pct_label = f"{pct:,.1f}%"
+
+                    width = min(abs(float(pct)), 100.0)
+
+                bar_class = "avah-bar neg" if float(pct) < 0 else "avah-bar"
+
+                return (
+
+                    "<div class='avah-cell'>"
+
+                    f"<div class='avah-value'>{val_str}</div>"
+
+                    "<div class='avah-bar-wrap'>"
+
+                    f"<div class='{bar_class}' style='width:{width:.0f}%'></div>"
+
+                    f"<div class='avah-bar-text'>{pct_label}</div>"
+
+                    "</div>"
+
+                    "</div>"
+
+                )
+
+
+            def _render_bar_table(df_vals, df_pct, anos_cols, mode):
+
+                st.markdown(
+
+                    '''
+
+                    <style>
+
+                    .avah-table { width: 100%; border-collapse: collapse; }
+
+                    .avah-table th, .avah-table td { border-bottom: 1px solid #e6e6e6; padding: 8px 10px; vertical-align: middle; }
+
+                    .avah-table th { background: #fafafa; text-align: left; }
+
+                    .avah-table { table-layout: fixed; }
+
+                    .avah-table th:first-child, .avah-table td:first-child { width: 200px; }
+
+                    .avah-bold td { font-weight: 700; }
+
+                    .avah-value { font-weight: 600; margin-bottom: 4px; }
+
+                    .avah-bar-wrap { position: relative; background: #eef2f6; border-radius: 6px; height: 14px; overflow: hidden; }
+
+                    .avah-bar { height: 14px; background: linear-gradient(90deg, #2c7be5, #00c6b8); }
+
+                    .avah-bar.neg { background: linear-gradient(90deg, #f26, #ff9aa2); }
+
+                    .avah-bar-text {
+
+                        position: absolute;
+
+                        inset: 0;
+
+                        display: flex;
+
+                        align-items: center;
+
+                        justify-content: center;
+
+                        font-size: 0.75em;
+
+                        font-weight: 700;
+
+                        color: #0f1f2e;
+
+                        text-shadow: 0 1px 0 rgba(255, 255, 255, 0.7);
+
+                        pointer-events: none;
+
+                    }
+
+                    .avah-sep td { padding: 6px 0; border-bottom: none; }
+
+                    .avah-conta { white-space: normal; word-break: break-word; }
+
+                    </style>
+
+                    ''',
+
+                    unsafe_allow_html=True
+
+                )
+
+                header_html = "<tr><th>Conta</th>" + "".join(f"<th>{html.escape(a)}</th>" for a in anos_cols) + "</tr>"
+
+                rows_html = []
+
+                for idx, row in df_vals.iterrows():
+
+                    conta_raw = row.get("Conta", "")
+
+                    conta = conta_limpa(conta_raw)
+
+                    if conta.strip() == "":
+
+                        rows_html.append(f"<tr class='avah-sep'><td colspan='{len(anos_cols) + 1}'></td></tr>")
+
+                        continue
+
+                    row_class = "avah-bold" if conta in contas_bold else ""
+
+                    row_html = f"<tr class='{row_class}'><td class='avah-conta'>{html.escape(str(conta_raw))}</td>"
+
+                    for a in anos_cols:
+
+                        valor = df_vals.loc[idx, a] if a in df_vals.columns else np.nan
+
+                        pct = df_pct.loc[idx, a] if a in df_pct.columns else np.nan
+
+                        row_html += f"<td>{_bar_cell_html(valor, pct, mode)}</td>"
+
+                    row_html += "</tr>"
+
+                    rows_html.append(row_html)
+
+                table_html = "<table class='avah-table'>" + header_html + "".join(rows_html) + "</table>"
+
+                st.markdown(table_html, unsafe_allow_html=True)
+
+
             # -------- Vertical (%)
-            df_vert = df_base[["Conta"] + anos_ok].copy()
-            for a in anos_ok:
-                df_vert[a] = safe_div(df_vert[a].values, float(base[a])) * 100.0
+
+            if alvo == "DRE":
+
+                df_vert_pct = df_base[["Conta"] + anos_ok].copy()
+
+                for a in anos_ok:
+
+                    df_vert_pct[a] = safe_div(df_base[a].values, float(base[a]))
+
+                df_vert_vals = df_base[["Conta"] + anos_ok].copy()
+
+            else:
+
+                df_bp_num = _to_num(df_base, anos)
+
+                total_ativo = pd.Series({a: get_val(df_bp_num, "Ativo Total", a) for a in anos_ok})
+
+                if float(total_ativo.abs().sum()) == 0.0:
+
+                    total_ativo = pd.Series({
+
+                        a: get_val(df_bp_num, "Ativo Circulante", a)
+
+                        + get_val(df_bp_num, "Ativo Não Circulante", a)
+
+                        for a in anos_ok
+
+                    })
+
+                total_passivo = pd.Series({a: get_val(df_bp_num, "Passivo Total", a) for a in anos_ok})
+
+                if float(total_passivo.abs().sum()) == 0.0:
+
+                    total_passivo = pd.Series({
+
+                        a: get_val(df_bp_num, "Passivo Circulante", a)
+
+                        + get_val(df_bp_num, "Passivo Não Circulante", a)
+
+                        + get_val(df_bp_num, "Patrimônio Líquido", a)
+
+                        for a in anos_ok
+
+                    })
+
+                grupos_ativos = {"Ativo Circulante", "Ativo Não Circulante", "Ativo Total"}
+
+                grupos_passivos = {"Passivo Circulante", "Passivo Não Circulante", "Patrimônio Líquido", "Passivo Total"}
+
+                grupos_totais = {conta_limpa(c) for c in contas_bold}
+
+                grupo_por_idx = {}
+
+                buffer_idxs = []
+
+                for idx, row in df_base.iterrows():
+
+                    conta_raw = row.get("Conta", "")
+
+                    conta = conta_limpa(conta_raw)
+
+                    if conta.strip() == "":
+
+                        buffer_idxs = []
+
+                        continue
+
+                    buffer_idxs.append(idx)
+
+                    if conta in grupos_totais:
+
+                        for i in buffer_idxs:
+
+                            grupo_por_idx[i] = conta
+
+                        buffer_idxs = []
+
+                df_vert_vals = df_base[["Conta"] + anos_ok].copy()
+
+                df_vert_pct = df_base[["Conta"] + anos_ok].copy()
+
+                for idx, row in df_base.iterrows():
+
+                    conta_raw = row.get("Conta", "")
+
+                    conta = conta_limpa(conta_raw)
+
+                    if conta.strip() == "":
+
+                        for a in anos_ok:
+
+                            df_vert_pct.loc[idx, a] = np.nan
+
+                        continue
+
+                    grupo = grupo_por_idx.get(idx)
+
+                    is_ativo = (conta in grupos_ativos) or (grupo in grupos_ativos)
+
+                    base_total = total_ativo if is_ativo else total_passivo
+
+                    for a in anos_ok:
+
+                        if base_bp_ref == "Conta Global":
+
+                            base_val = base_total.get(a, 0.0)
+
+                        else:
+
+                            base_val = get_val(df_bp_num, grupo, a) if grupo else base_total.get(a, 0.0)
+
+                        v = df_bp_num.loc[idx, a] if a in df_bp_num.columns else np.nan
+
+                        df_vert_pct.loc[idx, a] = np.nan if base_val == 0 else (float(v) / float(base_val))
+
 
             # -------- Horizontal (% var)
+
             df_hpct = df_base[["Conta"] + anos_ok].copy()
+
             for j in range(1, len(anos_ok)):
+
                 a_now = anos_ok[j]
+
                 a_prev = anos_ok[j-1]
+
                 abs_var = df_base[a_now] - df_base[a_prev]
+
                 pct_var = safe_div(abs_var.values, df_base[a_prev].values) * 100.0
+
                 df_hpct[a_now] = pct_var
 
             if len(anos_ok) >= 1:
+
                 df_hpct[anos_ok[0]] = np.nan
 
+            df_h_vals = df_base[["Conta"] + anos_ok].copy()
+
+
             c1, c2 = st.columns(2)
+
             with c1:
+
                 st.markdown(f"#### Vertical (%) — Base: {base_nome}")
-                st.dataframe(
-                    df_vert.style.format({a: "{:,.2f}%" for a in anos_ok}),
-                    use_container_width=True,
-                    height=min(1200, 40 + 32 * (len(df_vert) + 2))
-                )
+
+                _render_bar_table(df_vert_vals, df_vert_pct, anos_ok, "ratio")
 
             with c2:
-                st.markdown("#### Horizontal (Δ % vs período anterior)")
-                st.dataframe(
-                    df_hpct.style.format({a: "{:,.2f}%" for a in anos_ok}),
-                    use_container_width=True,
-                    height=min(1200, 40 + 32 * (len(df_hpct) + 2))
-                )
 
-        # =================================================
-        # SUBABA 2 — PMR / PME / PMP
-        # =================================================
+                st.markdown("#### Horizontal (% vs período anterior)")
+
+                _render_bar_table(df_h_vals, df_hpct, anos_ok, "pct")
+
         with sub_ciclos:
             st.markdown("### ⏱️ Ciclo de Caixa — PMR, PME, PMP")
 
@@ -2023,6 +2306,9 @@ with tab2:
                     w_e[a] = (e / tot) * 100.0
                     wacc[a] = ke * (w_e[a] / 100.0) + kd_after * (w_d[a] / 100.0)
 
+            st.session_state["wacc_series"] = wacc.copy()
+            st.session_state["ke_pct"] = float(ke)
+
 
             # -----------------------------
             # Tabela (invertida: anos como colunas)
@@ -2145,11 +2431,11 @@ with tab2:
 
 
 # =========================================================
-# TAB 3 — MATRIZ DO CAIXA (OPERACIONAL) — QUINZENAL
+# TAB 3 — MATRIZ DO CAIXA (OPERACIONAL) — DIÁRIO
 # =========================================================
 with tab3:
     st.subheader("🧩 Matriz do Caixa — Exposição Máxima de Capital de Giro (Ciclo Operacional)")
-    st.caption("Matriz quinzenal baseada em CMV como origem do ciclo. Considera ativos e passivos cíclicos; salários+impostos pagos 1x/mês (a cada 2 quinzenas).")
+    st.caption("Matriz diária baseada em CMV como origem do ciclo. Considera ativos e passivos cíclicos; salários+impostos pagos 1x/mês (a cada 30 dias).")
 
     dre_df = st.session_state.get("dre_df")
     bp_df  = st.session_state.get("balanco_df")
@@ -2178,13 +2464,13 @@ with tab3:
             except Exception:
                 return np.nan
 
-        def ceil_quinzena(dias):
-            # converte dias -> número de quinzenas (arredonda para cima)
+        def ceil_dia(dias):
+            # converte dias -> número de dias (arredonda para cima)
             try:
                 dias = float(dias)
             except Exception:
                 dias = 0.0
-            return int(np.ceil(max(0.0, dias) / 15.0))
+            return int(np.ceil(max(0.0, dias)))
 
         # -----------------------------
         # Seleção do ano de referência
@@ -2206,14 +2492,14 @@ with tab3:
         with c_prazos3:
             pmp_d = st.number_input("PMP (dias)", value=57.0, step=1.0)
 
-        pmr_q = ceil_quinzena(pmr_d)
-        pme_q = ceil_quinzena(pme_d)
-        pmp_q = ceil_quinzena(pmp_d)
+        pmr_q = ceil_dia(pmr_d)
+        pme_q = ceil_dia(pme_d)
+        pmp_q = ceil_dia(pmp_d)
 
         ciclo_oper_q = pmr_q + pme_q
         ciclo_fin_q  = max(0, ciclo_oper_q - pmp_q)  # apenas referência; matriz é operacional
 
-        st.caption(f"Conversão para quinzena (≈15 dias): PME={pme_q}q, PMR={pmr_q}q, PMP={pmp_q}q | Ciclo Operacional={ciclo_oper_q}q | Ciclo Financeiro={ciclo_fin_q}q")
+        st.caption(f"Base diária: PME={pme_q}d, PMR={pmr_q}d, PMP={pmp_q}d | Ciclo Operacional={ciclo_oper_q}d | Ciclo Financeiro={ciclo_fin_q}d")
 
         st.divider()
 
@@ -2225,15 +2511,17 @@ with tab3:
 
         cr   = float(get_serie_local(bp_df, "Contas a Receber").get(ano_ref, 0.0))
         est  = float(get_serie_local(bp_df, "Estoques").get(ano_ref, 0.0))
-        adi  = float(get_serie_local(bp_df, "Adiantamentos").get(ano_ref, 0.0))
 
         forn = float(get_serie_local(bp_df, "Fornecedores").get(ano_ref, 0.0))
         sal  = float(get_serie_local(bp_df, "Salários").get(ano_ref, 0.0))
         imp  = float(get_serie_local(bp_df, "Impostos e Encargos Sociais").get(ano_ref, 0.0))
 
+        div_cp = float(get_serie_local(bp_df, "Empréstimos e Financiamentos (CP)").get(ano_ref, 0.0))
+        div_lp = float(get_serie_local(bp_df, "Empréstimos e Financiamentos (LP)").get(ano_ref, 0.0))
+        div_total = div_cp + div_lp
+
         # Ativos e passivos cíclicos (como você definiu antes)
-        incluir_adi = st.checkbox("Incluir Adiantamentos no ACC", value=True)
-        acc_val = cr + est + (adi if incluir_adi else 0.0)
+        acc_val = cr + est
         pcc_val = forn + sal + imp
         iog_val = acc_val - pcc_val
 
@@ -2245,22 +2533,22 @@ with tab3:
         st.divider()
 
         # -----------------------------
-        # Matriz Operacional (quinzenal) — CMV como origem
+        # Matriz Operacional (diária) — CMV como origem
         # -----------------------------
         # Ideia:
-        # - cada "coorte" de compra (CMV) nasce na quinzena t
-        # - fica "presa" em estoque por pme_q
-        # - depois vira CR por pmr_q
+        # - cada "coorte" de compra (CMV) nasce no dia t
+        # - fica "presa" em estoque por pme_q dias
+        # - depois vira CR por pmr_q dias
         # - o financiamento por fornecedores atua até pmp_q
-        # - salários+impostos: descarga mensal (a cada 2 quinzenas), aproximada como parcelas iguais no horizonte
+        # - salários+impostos: descarga mensal (a cada 2 dias), aproximada como parcelas iguais no horizonte
 
         # Horizonte mínimo para visualizar bem (1 ciclo operacional + folga)
-        horizon_q = max(8, ciclo_oper_q + 6)  # você pode ajustar
+        horizon_q = max(120, ciclo_oper_q + 60)  # você pode ajustar
         quinz = list(range(1, horizon_q + 1))
 
-        # Volume de CMV por quinzena (origem)
-        # Ano contábil -> 24 quinzenas/ano. Se faltarem dados, cai para 0.
-        cmv_por_q = cmv_abs / 24.0 if cmv_abs else 0.0
+        # Volume de CMV por dia (origem)
+        # Ano contábil -> 365 dias/ano. Se faltarem dados, cai para 0.
+        cmv_por_q = cmv_abs / 365.0 if cmv_abs else 0.0
 
         # Percentuais de entrada (sem parcelamento) — você comentou que isso é interessante
         # Aqui aplicamos na compra (fornecedor) e na venda (cliente)
@@ -2270,6 +2558,15 @@ with tab3:
         with cc2:
             pct_entrada_venda = st.slider("% entrada na venda (cliente)", 0.0, 100.0, 0.0, 1.0) / 100.0
 
+        cdebt1, cdebt2 = st.columns(2)
+        with cdebt1:
+            pct_amort_ano = st.slider("% amortização anual da dívida", 0.0, 100.0, 0.0, 1.0) / 100.0
+        with cdebt2:
+            kd_ano = st.number_input("Custo médio da dívida (% a.a.)", value=12.0, step=0.25) / 100.0
+
+        servico_divida_d = div_total * (pct_amort_ano + kd_ano) / 365.0
+        st.caption(f"Serviço diário estimado da dívida: R$ {servico_divida_d:,.0f}")
+
         # Para manter coerência, se há entrada na venda, reduz o CR "final" associado às vendas futuras.
         # (modelo simples e transparente)
 
@@ -2277,14 +2574,12 @@ with tab3:
         # Proporção do ACC em relação ao "nível operacional" (cmv/receita ajuda a calibrar, mas pode ser ruim se receita=0)
         # Aqui usamos o próprio BP como tamanho-alvo; a matriz é exposição, então é razoável distribuir o ACC/PCC pelo ciclo.
         # Parte do ACC que é estoque vs CR (usamos peso do BP)
-        acc_component = est + cr + (adi if incluir_adi else 0.0)
+        acc_component = est + cr
         w_est = safe_div_scalar(est, acc_component) if acc_component else np.nan
         w_cr  = safe_div_scalar(cr,  acc_component) if acc_component else np.nan
-        w_adi = safe_div_scalar((adi if incluir_adi else 0.0), acc_component) if acc_component else np.nan
 
         if not np.isfinite(w_est): w_est = 0.5
         if not np.isfinite(w_cr):  w_cr  = 0.5
-        if not np.isfinite(w_adi): w_adi = 0.0
 
         # Passivos cíclicos: fornecedores vs (sal+imp)
         pcc_component = forn + sal + imp
@@ -2294,8 +2589,8 @@ with tab3:
         if not np.isfinite(w_forn):  w_forn = 0.6
         if not np.isfinite(w_folha): w_folha = 0.4
 
-        # Matrizes: linhas = coortes (1..horizon), colunas = quinzenas (1..horizon)
-        # Valores: exposição incremental da coorte na quinzena
+        # Matrizes: linhas = coortes (1..horizon), colunas = dias (1..horizon)
+        # Valores: exposição incremental da coorte no dia
         M = np.zeros((horizon_q, horizon_q), dtype=float)
 
         for t0 in range(1, horizon_q + 1):
@@ -2303,11 +2598,9 @@ with tab3:
             lote = cmv_por_q
 
             # 1) Estoque (usa caixa): do t0 até t0+pme_q-1
-            # (parcela de estoque + adiantamentos)
             est_val = lote * w_est
-            adi_val = lote * w_adi
             for t in range(t0, min(horizon_q, t0 + pme_q - 1) + 1):
-                M[t0-1, t-1] += (est_val + adi_val)
+                M[t0-1, t-1] += est_val
 
             # 2) CR (usa caixa): após PME, entra em CR por PMR
             cr_val = lote * w_cr
@@ -2333,57 +2626,32 @@ with tab3:
             # 4) Salários + Impostos (financia parcialmente? na prática é obrigação, então "reduz caixa" no pagamento)
             # Para matriz de exposição, a forma mais clara é:
             # - não reduzir exposição "todo dia", e sim colocar "descargas" mensais.
-            # Aqui vamos modelar como pagamentos mensais (a cada 2 quinzenas), distribuídos pelo horizonte,
+            # Aqui vamos modelar como pagamentos mensais (a cada 2 dias), distribuídos pelo horizonte,
             # proporcional ao lote e ao peso folha.
             folha_val = lote * w_folha
             
 
-            # Pagamento mensal: ocorre em quinzena par (2,4,6,...)
-            # Começa 1 mês após origem (t0+1) para evitar pagar antes de existir operação.
-            # Ajuste simples e transparente.
-            for t in range(2, horizon_q + 1, 2):
-                if t >= t0 + 1:
-                    # descarga: aumenta exposição (paga => precisa de caixa)
-                    # para manter consistência com "PCC" como fonte, aqui tratamos folha como "passivo cíclico"
-                    # e portanto NEGATIVA enquanto não paga. Como não estamos acumulando passivo de folha ao longo,
-                    # fazemos a aproximação: parte da folha reduz exposição no intervalo e volta no pagamento.
-                    # Simplificação: reduz por 2 quinzenas e volta no t par.
-                    # (Se quiser, depois refinamos com calendário específico.)
-                    t_ini = max(t-1, t0)
+            # Pagamento mensal: ocorre a cada 30 dias
+            # Começa 15 dias após origem para evitar pagar antes de existir operação.
+            for t in range(30, horizon_q + 1, 30):
+                if t >= t0 + 15:
+                    t_ini = max(t-29, t0)
                     t_fim = min(t, horizon_q)
                     # "financiamento" no intervalo
                     M[t0-1, t_ini-1] -= folha_val
                     # pagamento no t (reverte)
                     M[t0-1, t_fim-1] += folha_val
 
-        # Exposição total por quinzena (soma das coortes)
+        # Exposição total por dia (soma das coortes)
         expos_q = M.sum(axis=0)
         expo_max = float(np.nanmax(expos_q))
         t_pico = int(np.nanargmax(expos_q) + 1)
 
-        st.markdown("### Debug — Sensibilidade dos parâmetros")
-
-        st.write("pct_entrada_compra =", pct_entrada_compra, "| pct_entrada_venda =", pct_entrada_venda)
-
-        # Mostra estatísticas básicas da matriz
-        st.write("M min/max:", float(np.nanmin(M)), float(np.nanmax(M)))
-        st.write("Soma total de M (deveria tender a 0 se fechou o ciclo):", float(np.nansum(M)))
-
-        # fluxo e saldo
-        fluxo_q = np.nansum(M, axis=0)
-        saldo_acum = np.cumsum(fluxo_q)
-
-        st.write("Fluxo por quinzena (primeiras 8):", [float(v) for v in fluxo_q[:8]])
-        st.write("Saldo acumulado (primeiras 8):", [float(v) for v in saldo_acum[:8]])
-        st.write("Pico uso (min saldo):", float(np.nanmin(saldo_acum)))
-
-
-    
         # -----------------------------
         # Visualizações
         # -----------------------------
-        st.markdown("### Heatmap — Exposição por coorte (quinzenas)")
-        st.caption("Linhas = coortes de CMV (início da compra). Colunas = quinzenas. Valores positivos indicam necessidade (uso); negativos indicam financiamento operacional.")
+        st.markdown("### Heatmap — Exposição por coorte (dias)")
+        st.caption("Linhas = coortes de CMV (início da compra). Colunas = dias. Valores positivos indicam necessidade (uso); negativos indicam financiamento operacional.")
 
         # ===== AJUSTE DE VISUAL (cores + zero + escala simétrica) =====
         colorscale_divergente = [
@@ -2399,8 +2667,8 @@ with tab3:
         absmax = float(np.nanmax(np.abs(M_np))) if np.isfinite(np.nanmax(np.abs(M_np))) else 1.0
         zmin, zmax = -absmax, absmax
 
-        x_labels = [f"Q{t}" for t in quinz]
-        y_labels = [f"Coorte Q{t}" for t in quinz]
+        x_labels = [f"D{t}" for t in quinz]
+        y_labels = [f"Coorte D{t}" for t in quinz]
 
         fig_hm = go.Figure(data=go.Heatmap(
             z=M,
@@ -2439,13 +2707,14 @@ with tab3:
         # Curva — SALDO ACUMULADO (estoque de caixa necessário)
         # -----------------------------
         st.markdown("### Curva — Saldo acumulado do ciclo (identifica o pico de uso do caixa)")
-        st.caption("Aqui o gráfico mostra o *estoque* de caixa ao longo das quinzenas (cumulativo). O pico de necessidade é o menor saldo (mais negativo).")
+        st.caption("Aqui o gráfico mostra o *estoque* de caixa ao longo dos dias (cumulativo). O pico de necessidade é o menor saldo (mais negativo).")
 
-        # 1) fluxo por quinzena = soma das coortes (colunas da matriz)
+        # 1) fluxo por dia = soma das coortes (colunas da matriz)
         fluxo_q = np.nansum(M, axis=0)  # shape (len(quinz),)
+        fluxo_q_total = fluxo_q + servico_divida_d
 
         # 2) saldo acumulado (começa em 0)
-        saldo_acum = np.cumsum(fluxo_q)
+        saldo_acum = np.cumsum(fluxo_q_total)
 
         # 3) pico de uso de caixa = menor saldo (mais negativo)
         t_min = int(np.nanargmin(saldo_acum))  # índice
@@ -2457,7 +2726,7 @@ with tab3:
 
         # linha do saldo acumulado
         fig_saldo.add_trace(go.Scatter(
-            x=[f"Q{t}" for t in quinz],
+            x=[f"D{t}" for t in quinz],
             y=[float(v) for v in saldo_acum],
             mode="lines+markers",
             name="Saldo acumulado (R$)"
@@ -2496,7 +2765,7 @@ with tab3:
 
         st.markdown("### Parâmetros usados (transparência do modelo)")
         df_params = pd.DataFrame({
-            "Parâmetro": ["PME (q)", "PMR (q)", "PMP (q)", "Ciclo Operacional (q)", "CMV por quinzena", "% entrada compra", "% entrada venda"],
+            "Parâmetro": ["PME (q)", "PMR (q)", "PMP (q)", "Ciclo Operacional (q)", "CMV por dia", "% entrada compra", "% entrada venda"],
             "Valor": [pme_q, pmr_q, pmp_q, ciclo_oper_q, cmv_por_q, pct_entrada_compra*100, pct_entrada_venda*100]
         })
         st.dataframe(df_params, use_container_width=True, hide_index=True)
