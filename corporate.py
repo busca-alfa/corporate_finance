@@ -551,7 +551,7 @@ def consolidar_bp_com_override(bp_df: pd.DataFrame, override_df: pd.DataFrame) -
     mapa = {
         "Ativo Circulante": [
             "Caixa e Similares", "Contas a Receber (CP)", "Estoques", "Tributos a Recuperar (CP)",
-            "Partes Relacionadas (CP)", "Despesas Antecipadas", "Outros Ativos (CP)"
+            "Partes Relacionadas Ativo (CP)", "Despesas Antecipadas", "Outros Ativos (CP)"
         ],
         "Ativo Não Circulante": [
             "Contas a Receber (LP)", "Tributos a Recuperar (LP)", "Partes Relacionadas (LP)", "Judiciais",
@@ -560,7 +560,7 @@ def consolidar_bp_com_override(bp_df: pd.DataFrame, override_df: pd.DataFrame) -
         ],
         "Passivo Circulante": [
             "Obrigações Sociais e Trabalhistas", "Fornecedores", "Empréstimos (CP)", "Impostos (CP)",
-            "Partes Relacionadas (CP)", "Passivo de Arrendamento (CP)", "Outros Passivos (CP)"
+            "Partes Relacionadas Passivo (CP)", "Passivo de Arrendamento (CP)", "Outros Passivos (CP)"
         ],
         "Passivo Não Circulante": [
             "Empréstimos e Finan. (LP)", "Tributos (LP)", "Provisões (LP)", "Passivo de Arrendamento (LP)",
@@ -791,7 +791,7 @@ with tab1:
             "Contas a Receber (CP)",
             "Estoques",
             "Tributos a Recuperar (CP)",
-            "Partes Relacionadas (CP)",
+            "Partes Relacionadas Ativo (CP)",
             "Despesas Antecipadas",
             "Outros Ativos (CP)",
             "Ativo Circulante",
@@ -813,7 +813,7 @@ with tab1:
             "Fornecedores",
             "Empréstimos (CP)",
             "Impostos (CP)",
-            "Partes Relacionadas (CP)",
+            "Partes Relacionadas Passivo (CP)",
             "Passivo de Arrendamento (CP)",
             "Outros Passivos (CP)",
             "Passivo Circulante",
@@ -1148,7 +1148,7 @@ with tab1:
                 d_cr = delta(bp_df, "Contas a Receber (CP)", a_atual, a_ant)
                 d_est = delta(bp_df, "Estoques", a_atual, a_ant)
                 d_trib = delta(bp_df, "Tributos a Recuperar (CP)", a_atual, a_ant)
-                d_pr_cp = delta(bp_df, "Partes Relacionadas (CP)", a_atual, a_ant)
+                d_pr_cp = delta(bp_df, "Partes Relacionadas Ativo (CP)", a_atual, a_ant)
                 d_adi = delta(bp_df, "Despesas Antecipadas", a_atual, a_ant)
                 d_out_ac = delta(bp_df, "Outros Ativos (CP)", a_atual, a_ant)
                 d_cr_lp = delta(bp_df, "Contas a Receber (LP)", a_atual, a_ant)
@@ -1160,7 +1160,7 @@ with tab1:
                 # Passivo operacional (CP/LP) — aumento gera caixa
                 d_forn = delta(bp_df, "Fornecedores", a_atual, a_ant)
                 d_imp_cp = delta(bp_df, "Impostos (CP)", a_atual, a_ant)
-                d_pr_pc = delta(bp_df, "Partes Relacionadas (CP)", a_atual, a_ant)
+                d_pr_pc = delta(bp_df, "Partes Relacionadas Passivo (CP)", a_atual, a_ant)
                 d_trib_lp_psv = delta(bp_df, "Tributos (LP)", a_atual, a_ant)
                 d_prov_lp = delta(bp_df, "Provisões (LP)", a_atual, a_ant)
                 d_out_lp = delta(bp_df, "Outros Passivos (LP)", a_atual, a_ant)
@@ -1373,7 +1373,7 @@ with tab2:
             caixa = get_serie(bp_df, "Caixa e Similares")
             cr    = get_serie(bp_df, "Contas a Receber (CP)")
             trib  = get_serie(bp_df, "Tributos a Recuperar (CP)")
-            pr_cp = get_serie(bp_df, "Partes Relacionadas (CP)")
+            pr_cp = get_serie(bp_df, "Partes Relacionadas Ativo (CP)")
             est   = get_serie(bp_df, "Estoques")
             adi   = get_serie(bp_df, "Despesas Antecipadas")
             out_ac = get_serie(bp_df, "Outros Ativos (CP)")
@@ -1383,7 +1383,7 @@ with tab2:
 
             forn  = get_serie(bp_df, "Fornecedores")
             sal   = get_serie(bp_df, "Obrigações Sociais e Trabalhistas")
-            pr_pc = get_serie(bp_df, "Partes Relacionadas (CP)")
+            pr_pc = get_serie(bp_df, "Partes Relacionadas Passivo (CP)")
             arr_cp = get_serie(bp_df, "Passivo de Arrendamento (CP)")
             impcp = get_serie(bp_df, "Impostos (CP)")
 
@@ -2010,7 +2010,7 @@ with tab2:
             forn = get_serie(bp_df, "Fornecedores")
             sal  = get_serie(bp_df, "Obrigações Sociais e Trabalhistas")
             imp  = get_serie(bp_df, "Impostos (CP)")
-            pr_pc = get_serie(bp_df, "Partes Relacionadas (CP)")
+            pr_pc = get_serie(bp_df, "Partes Relacionadas Passivo (CP)")
             arr_cp = get_serie(bp_df, "Passivo de Arrendamento (CP)")
 
             def safe_div_scalar(n, d):
@@ -2272,14 +2272,14 @@ with tab2:
                 cr   = get_serie(bp_df, "Contas a Receber (CP)")
                 est  = get_serie(bp_df, "Estoques")
                 trib = get_serie(bp_df, "Tributos a Recuperar (CP)")
-                pr_cp = get_serie(bp_df, "Partes Relacionadas (CP)")
+                pr_cp = get_serie(bp_df, "Partes Relacionadas Ativo (CP)")
                 adi  = get_serie(bp_df, "Despesas Antecipadas")
                 out_ac = get_serie(bp_df, "Outros Ativos (CP)")
 
                 forn = get_serie(bp_df, "Fornecedores")
                 sal  = get_serie(bp_df, "Obrigações Sociais e Trabalhistas")
                 imp  = get_serie(bp_df, "Impostos (CP)")
-                pr_pc = get_serie(bp_df, "Partes Relacionadas (CP)")
+                pr_pc = get_serie(bp_df, "Partes Relacionadas Passivo (CP)")
                 arr_cp = get_serie(bp_df, "Passivo de Arrendamento (CP)")
 
                 anc  = get_serie(bp_df, "Ativo Não Circulante")
@@ -2413,40 +2413,47 @@ with tab2:
             st.divider()
 
             # -----------------------------
-            # Séries base (BP / DRE)
+            # Séries base (BP / DRE) — CONTAS DO SEU MODELO
             # -----------------------------
-            # Dívida bruta (proxy = empréstimos CP + LP) e PL
-            div_cp = get_serie(bp_df, "Empréstimos (CP)")
-            div_lp = get_serie(bp_df, "Empréstimos e Finan. (LP)")
-            debt = div_cp + div_lp
+            # Caixa
+            caixa = get_serie(bp_df, "Caixa e Similares").reindex(anos_ok).astype(float)
 
-            equity = get_serie(bp_df, "Patrimônio Líquido")
+            # Dívida (proxy = empréstimos CP + LP)
+            div_cp = get_serie(bp_df, "Empréstimos (CP)").reindex(anos_ok).astype(float)
+            div_lp = get_serie(bp_df, "Empréstimos e Finan. (LP)").reindex(anos_ok).astype(float)
+            debt = (div_cp + div_lp).astype(float)
 
-            # ROIC (recalcula aqui para não depender de outra subaba)
-            ebit = get_serie(dre_df, "Lucro Operacional - EBIT")
+            # PL
+            equity = get_serie(bp_df, "Patrimônio Líquido").reindex(anos_ok).astype(float)
 
-            # Capital investido (proxy coerente com seu Fleuriet)
-            cr   = get_serie(bp_df, "Contas a Receber (CP)")
-            est  = get_serie(bp_df, "Estoques")
-            trib = get_serie(bp_df, "Tributos a Recuperar (CP)")
-            pr_cp = get_serie(bp_df, "Partes Relacionadas (CP)")
-            adi  = get_serie(bp_df, "Despesas Antecipadas")
-            out_ac = get_serie(bp_df, "Outros Ativos (CP)")
+            # ROIC (recalcula aqui)
+            ebit = get_serie(dre_df, "Lucro Operacional - EBIT").reindex(anos_ok).astype(float)
 
-            forn = get_serie(bp_df, "Fornecedores")
-            sal  = get_serie(bp_df, "Obrigações Sociais e Trabalhistas")
-            imp  = get_serie(bp_df, "Impostos (CP)")
-            pr_pc = get_serie(bp_df, "Partes Relacionadas (CP)")
-            arr_cp = get_serie(bp_df, "Passivo de Arrendamento (CP)")
+            # Itens operacionais (Fleuriet) — exatamente como seu app
+            cr     = get_serie(bp_df, "Contas a Receber (CP)").reindex(anos_ok).astype(float)
+            est    = get_serie(bp_df, "Estoques").reindex(anos_ok).astype(float)
+            trib   = get_serie(bp_df, "Tributos a Recuperar (CP)").reindex(anos_ok).astype(float)
+            pr_cp  = get_serie(bp_df, "Partes Relacionadas Ativo (CP)").reindex(anos_ok).astype(float)
+            adi    = get_serie(bp_df, "Despesas Antecipadas").reindex(anos_ok).astype(float)
+            out_ac = get_serie(bp_df, "Outros Ativos (CP)").reindex(anos_ok).astype(float)
 
+            forn   = get_serie(bp_df, "Fornecedores").reindex(anos_ok).astype(float)
+            sal    = get_serie(bp_df, "Obrigações Sociais e Trabalhistas").reindex(anos_ok).astype(float)
+            imp    = get_serie(bp_df, "Impostos (CP)").reindex(anos_ok).astype(float)
+            pr_pc  = get_serie(bp_df, "Partes Relacionadas Passivo (CP)").reindex(anos_ok).astype(float)
+            arr_cp = get_serie(bp_df, "Passivo de Arrendamento (CP)").reindex(anos_ok).astype(float)
+
+            # ANC (precisa existir aqui; no seu código estava faltando)
+            anc = get_serie(bp_df, "Ativo Não Circulante").reindex(anos_ok).astype(float)
+
+            # IOG/Capital investido (proxy coerente com seu Fleuriet)
             acc = cr + est + trib + pr_cp + adi + out_ac
             pcc = forn + sal + imp + pr_pc + arr_cp
             iog = acc - pcc
 
-            # NOPAT e ROIC
             nopat = ebit * (1.0 - tax)
             cap_inv = iog + anc
-            roic = safe_div(nopat, cap_inv) * 100.0  # em %
+            roic = (safe_div(nopat, cap_inv) * 100.0).reindex(anos_ok)
 
             # -----------------------------
             # WACC por ano
@@ -2454,14 +2461,13 @@ with tab2:
             ke = (rf + beta * mrp) * 100.0           # Ke em %
             kd_after = (kd * (1.0 - tax)) * 100.0    # Kd pós-IR em %
 
-            # pesos por ano (como Series indexada por "Ano i")
             w_d = pd.Series(index=anos_ok, dtype=float)
             w_e = pd.Series(index=anos_ok, dtype=float)
             wacc = pd.Series(index=anos_ok, dtype=float)
 
             for a in anos_ok:
-                d = float(debt[a])
-                e = float(equity[a])
+                d = float(debt.get(a, 0.0))
+                e = float(equity.get(a, 0.0))
                 tot = d + e
 
                 if tot == 0:
@@ -2476,25 +2482,24 @@ with tab2:
             st.session_state["wacc_series"] = wacc.copy()
             st.session_state["ke_pct"] = float(ke)
 
-
             # -----------------------------
-            # Tabela (invertida: anos como colunas)
+            # Tabela (anos nas colunas)
             # -----------------------------
-            # Monta DF com anos nas linhas e depois transpõe
             df_wacc = pd.DataFrame(index=anos_ok)
+            df_wacc["Caixa e Similares"] = [float(caixa[a]) for a in anos_ok]
             df_wacc["Dívida Bruta"] = [float(debt[a]) for a in anos_ok]
+            df_wacc["Dívida Líquida"] = [float(debt[a] - caixa[a]) for a in anos_ok]
             df_wacc["Patrimônio Líquido"] = [float(equity[a]) for a in anos_ok]
             df_wacc["Peso Dívida (%)"] = [float(w_d[a]) if pd.notna(w_d[a]) else np.nan for a in anos_ok]
             df_wacc["Peso PL (%)"] = [float(w_e[a]) if pd.notna(w_e[a]) else np.nan for a in anos_ok]
-            df_wacc["Ke (%)"] = ke
-            df_wacc["Kd pós-IR (%)"] = kd_after
+            df_wacc["Ke (%)"] = float(ke)
+            df_wacc["Kd pós-IR (%)"] = float(kd_after)
             df_wacc["WACC (%)"] = [float(wacc[a]) if pd.notna(wacc[a]) else np.nan for a in anos_ok]
-            
-            # --- Garantir ROIC como Series indexada por anos_ok (evita IndexError quando roic vira ndarray) ---
+
+            # ROIC robusto
             if isinstance(roic, pd.Series):
                 roic_s = roic.reindex(anos_ok).astype(float)
             else:
-                # tenta interpretar como lista/ndarray na mesma ordem de anos_ok
                 try:
                     roic_s = pd.Series(list(roic), index=anos_ok, dtype=float)
                 except Exception:
@@ -2503,16 +2508,9 @@ with tab2:
             df_wacc["ROIC (%)"] = [float(roic_s[a]) if pd.notna(roic_s[a]) else np.nan for a in anos_ok]
             df_wacc["Spread (ROIC - WACC) p.p."] = df_wacc["ROIC (%)"] - df_wacc["WACC (%)"]
 
-            # Inverte: linhas = métricas, colunas = anos
             df_wacc_t = df_wacc.T
             df_wacc_t.columns = anos_ok
 
-            # Formatação
-            fmt = {}
-            for a in anos_ok:
-                fmt[a] = lambda v: "" if (v is None or (isinstance(v, float) and np.isnan(v))) else f"{v:,.2f}"
-
-            # Ajustes por métrica
             def fmt_money(v):
                 if v is None or (isinstance(v, float) and np.isnan(v)): return ""
                 return f"R$ {v:,.0f}"
@@ -2527,16 +2525,16 @@ with tab2:
 
             format_dict = {}
             for idx in df_wacc_t.index:
-                if idx in ["Dívida Bruta", "Patrimônio Líquido"]:
+                if idx in ["Caixa e Similares", "Dívida Bruta", "Dívida Líquida", "Patrimônio Líquido"]:
                     format_dict[idx] = fmt_money
                 elif "p.p." in idx:
                     format_dict[idx] = fmt_pp
+                elif "%" in idx:
+                    format_dict[idx] = fmt_pct
                 else:
-                    format_dict[idx] = fmt_pct if ("%" in idx) else (lambda v: f"{v:,.2f}" if pd.notna(v) else "")
+                    format_dict[idx] = lambda v: "" if (v is None or (isinstance(v, float) and np.isnan(v))) else f"{v:,.2f}"
 
-            # Altura exata (evita “linhas vazias” visuais)
-            altura = min(520, 40 + 32 * (len(df_wacc_t) + 1))
-
+            altura = min(650, 40 + 32 * (len(df_wacc_t) + 1))
             st.dataframe(
                 df_wacc_t.style.format(format_dict, subset=pd.IndexSlice[:, anos_ok]),
                 use_container_width=True,
@@ -2574,11 +2572,9 @@ with tab2:
             # -----------------------------
             # Criação de valor (mensagem)
             # -----------------------------
-            # Se ROIC estiver todo NaN (ex.: capital investido zero), avisa corretamente.
             if np.all(np.isnan(np.array(y_roic, dtype=float))):
-                st.info("ROIC não disponível para comparação (capital investido ficou 0 ou dados insuficientes nos itens do BP para IOG/ANC).")
+                st.info("ROIC não disponível para comparação (capital investido ficou 0 ou dados insuficientes para IOG/ANC).")
             else:
-                # Usa último ano com valores válidos
                 last_valid = None
                 for a in reversed(x):
                     r = df_wacc.loc[a, "ROIC (%)"]
@@ -2595,6 +2591,93 @@ with tab2:
                         st.success(f"No **{last_valid}**, a empresa cria valor: **ROIC - WACC = {spread_last:+.2f} p.p.**")
                     else:
                         st.warning(f"No **{last_valid}**, a empresa destrói valor: **ROIC - WACC = {spread_last:+.2f} p.p.**")
+
+            st.divider()
+            st.markdown("### 📉 Estrutura de Capital — Ke, Kd e WACC vs Endividamento (D/E)")
+
+            # --- Ano âncora para estimar o D/E atual (usa último com dados) ---
+            ano_anchor = st.selectbox("Ano âncora para estrutura de capital", options=anos_ok, index=len(anos_ok)-1, key="wacc_anchor_year")
+
+            d0 = float(debt.get(ano_anchor, 0.0))
+            e0 = float(equity.get(ano_anchor, 0.0))
+            de0 = np.nan if e0 == 0 else (d0 / e0)
+
+            st.caption(
+                "Racional: beta aumenta com alavancagem (Hamada). Kd pode aumentar conforme D/E cresce (curva de risco). "
+                "O mínimo do WACC aparece quando o ganho de alavancagem (escudo fiscal) passa a ser superado pelo aumento de Ke/Kd."
+            )
+
+            # --- Controles do modelo de Kd crescente ---
+            cA, cB, cC = st.columns(3)
+            with cA:
+                kd_base = st.number_input("Kd base (% a.a.)", value=float(kd*100.0), step=0.25) / 100.0
+            with cB:
+                kd_slope_bps = st.number_input("Acréscimo de Kd (bps) por +1.0 em D/E", value=150, step=25)
+            with cC:
+                de_max = st.number_input("D/E máximo na simulação", value=2.5, step=0.25)
+
+            # --- Beta: assumimos que o beta informado é o beta alavancado atual (no D/E do ano âncora) ---
+            # Hamada: betaL = betaU * (1 + (1-tax)*D/E)  => betaU = betaL / (1 + (1-tax)*D/E)
+            betaL_atual = float(beta)
+            if np.isnan(de0) or de0 < 0:
+                de0 = 0.0
+
+            betaU = betaL_atual / (1.0 + (1.0 - tax) * de0) if (1.0 + (1.0 - tax) * de0) != 0 else betaL_atual
+
+            # --- Grade de D/E ---
+            grid = np.linspace(0.0, float(de_max), 120)
+
+            # Ke(D/E) via CAPM com beta alavancado
+            betaL_grid = betaU * (1.0 + (1.0 - tax) * grid)
+            ke_grid = (rf + betaL_grid * mrp)  # em decimal
+
+            # Kd(D/E) cresce linearmente em bps por 1.0 D/E (simples e efetivo)
+            kd_grid = kd_base + (kd_slope_bps / 10000.0) * grid  # bps -> decimal
+            kd_after_grid = kd_grid * (1.0 - tax)
+
+            # Pesos por D/E: D/(D+E) e E/(D+E)
+            wD_grid = grid / (1.0 + grid)
+            wE_grid = 1.0 / (1.0 + grid)
+
+            # WACC(D/E)
+            wacc_grid = wE_grid * ke_grid + wD_grid * kd_after_grid
+
+            # --- Ponto mínimo ---
+            i_min = int(np.nanargmin(wacc_grid))
+            de_star = float(grid[i_min])
+            wacc_star = float(wacc_grid[i_min])
+
+            # --- Gráfico ---
+            fig_cap = go.Figure()
+            fig_cap.add_trace(go.Scatter(x=grid, y=ke_grid*100.0, mode="lines", name="Ke (%)"))
+            fig_cap.add_trace(go.Scatter(x=grid, y=kd_grid*100.0, mode="lines", name="Kd (%)"))
+            fig_cap.add_trace(go.Scatter(x=grid, y=wacc_grid*100.0, mode="lines", name="WACC (%)"))
+
+            # Marcações: D/E atual e D/E ótimo
+            fig_cap.add_vline(x=de0, line_width=2, line_dash="dot")
+            fig_cap.add_vline(x=de_star, line_width=2)
+
+            fig_cap.add_annotation(x=de0, y=float(np.nanmin(wacc_grid)*100.0),
+                                text=f"D/E atual ~ {de0:.2f}", showarrow=True, yshift=25)
+            fig_cap.add_annotation(x=de_star, y=wacc_star*100.0,
+                                text=f"Mínimo WACC: D/E*={de_star:.2f} | {wacc_star*100.0:.2f}%",
+                                showarrow=True, yshift=25)
+
+            fig_cap.update_layout(
+                height=520,
+                xaxis_title="D/E (Dívida / Patrimônio Líquido)",
+                yaxis_title="Custo (%)",
+                margin=dict(l=10, r=10, t=10, b=10),
+                legend_title="Curvas"
+            )
+
+            st.plotly_chart(fig_cap, use_container_width=True)
+
+            st.info(
+                f"**Ponto mínimo estimado:** D/E* = **{de_star:.2f}** (ano âncora {ano_anchor} tinha D/E ~ {de0:.2f}). "
+                f"Nesse modelo, o WACC mínimo fica em **{wacc_star*100.0:.2f}% a.a.**"
+            )
+
 
 
 # =========================================================
@@ -2679,14 +2762,14 @@ with tab3:
         cr   = float(get_serie_local(bp_df, "Contas a Receber (CP)").get(ano_ref, 0.0))
         est  = float(get_serie_local(bp_df, "Estoques").get(ano_ref, 0.0))
         trib = float(get_serie_local(bp_df, "Tributos a Recuperar (CP)").get(ano_ref, 0.0))
-        pr_cp = float(get_serie_local(bp_df, "Partes Relacionadas (CP)").get(ano_ref, 0.0))
+        pr_cp = float(get_serie_local(bp_df, "Partes Relacionadas Ativo (CP)").get(ano_ref, 0.0))
         adi  = float(get_serie_local(bp_df, "Despesas Antecipadas").get(ano_ref, 0.0))
         out_ac = float(get_serie_local(bp_df, "Outros Ativos (CP)").get(ano_ref, 0.0))
 
         forn = float(get_serie_local(bp_df, "Fornecedores").get(ano_ref, 0.0))
         sal  = float(get_serie_local(bp_df, "Obrigações Sociais e Trabalhistas").get(ano_ref, 0.0))
         imp  = float(get_serie_local(bp_df, "Impostos (CP)").get(ano_ref, 0.0))
-        pr_pc = float(get_serie_local(bp_df, "Partes Relacionadas (CP)").get(ano_ref, 0.0))
+        pr_pc = float(get_serie_local(bp_df, "Partes Relacionadas Passivo (CP)").get(ano_ref, 0.0))
         arr_cp = float(get_serie_local(bp_df, "Passivo de Arrendamento (CP)").get(ano_ref, 0.0))
         out_pc = float(get_serie_local(bp_df, "Outros Passivos (CP)").get(ano_ref, 0.0))
 
