@@ -68,6 +68,9 @@ def restaurar_para_session_state(data: dict):
     st.session_state["bp_raw"] = records_to_df(data.get("bp_raw", []))
     ov_bp = records_to_df(data.get("bp_override", []))
     st.session_state["bp_override"] = ov_bp.set_index("Conta") if not ov_bp.empty and "Conta" in ov_bp.columns else st.session_state.get("bp_override")
+    st.session_state["analyst_notes"] = data.get("analyst_notes", "")
+    ov_fc = records_to_df(data.get("fc_override", []))
+    st.session_state["fc_override"] = ov_fc.set_index("Conta") if not ov_fc.empty and "Conta" in ov_fc.columns else st.session_state.get("fc_override")
 
 def coletar_payload_do_session_state(empresa_id: str, empresa_nome: str) -> dict:
     """Monta o JSON persistível com base no que está no app."""
@@ -82,6 +85,8 @@ def coletar_payload_do_session_state(empresa_id: str, empresa_nome: str) -> dict
         "dre_override": df_to_records(dre_override_df.reset_index()) if isinstance(dre_override_df, pd.DataFrame) else [],
         "bp_raw": df_to_records(st.session_state.get("bp_raw")),
         "bp_override": df_to_records(bp_override_df.reset_index()) if isinstance(bp_override_df, pd.DataFrame) else [],
+        "analyst_notes": st.session_state.get("analyst_notes", ""),
+        "fc_override": df_to_records(st.session_state.get("fc_override").reset_index()) if isinstance(st.session_state.get("fc_override"), pd.DataFrame) else [],
     }
     return payload
 
@@ -291,70 +296,6 @@ if btn_deletar:
         st.rerun()
 
 
-st.markdown("## 🏢 Empresa (carregar / salvar)")
-
-empresas = listar_empresas()
-opcoes = ["— Nova empresa —"] + [f"{nome}  ({eid})" for eid, nome in empresas]
-
-sel = st.selectbox("Selecione uma empresa", opcoes, index=0)
-
-colA, colB, colC = st.columns([2, 1, 1])
-
-with colA:
-    nome_novo = ""
-    if sel == "— Nova empresa —":
-        nome_novo = st.text_input("Nome da nova empresa", placeholder="Ex.: ACME S.A.")
-with colB:
-    btn_carregar = st.button("📥 Carregar", use_container_width=True)
-with colC:
-    btn_salvar = st.button("💾 Salvar", use_container_width=True)
-
-# Resolve empresa_id atual
-if sel == "— Nova empresa —":
-    empresa_nome = nome_novo.strip()
-    empresa_id = slugify(empresa_nome) if empresa_nome else ""
-else:
-    # extrai id entre parênteses no final
-    empresa_id = sel.split("(")[-1].replace(")", "").strip()
-    empresa_nome = dict(empresas).get(empresa_id, empresa_id)
-
-# Guarda seleção no session_state
-st.session_state["empresa_id"] = empresa_id
-st.session_state["empresa_nome"] = empresa_nome
-
-# CARREGAR
-if btn_carregar:
-    if not empresa_id:
-        st.warning("Informe o nome da empresa para carregar/criar.")
-    else:
-        data = carregar_empresa(empresa_id)
-        if not data:
-            st.info("Empresa ainda não tem dados salvos. Você pode preencher e salvar.")
-        else:
-            # restaura dataframes nos estados do app
-            st.session_state["dre_raw"] = records_to_df(data.get("dre_raw"))
-            st.session_state["dre_override"] = records_to_df(data.get("dre_override")).set_index("Conta") if data.get("dre_override") else st.session_state.get("dre_override")
-            st.session_state["bp_raw"] = records_to_df(data.get("bp_raw"))
-            st.session_state["bp_override"] = records_to_df(data.get("bp_override")).set_index("Conta") if data.get("bp_override") else st.session_state.get("bp_override")
-            st.success(f"Dados carregados: {empresa_nome} ({empresa_id})")
-
-# SALVAR
-if btn_salvar:
-    if not empresa_id:
-        st.warning("Informe o nome da empresa antes de salvar.")
-    else:
-        payload = {
-            "empresa_id": empresa_id,
-            "empresa_nome": empresa_nome,
-            "dre_raw": df_to_records(st.session_state.get("dre_raw")),
-            "dre_override": df_to_records(st.session_state.get("dre_override").reset_index()) if isinstance(st.session_state.get("dre_override"), pd.DataFrame) else [],
-            "bp_raw": df_to_records(st.session_state.get("bp_raw")),
-            "bp_override": df_to_records(st.session_state.get("bp_override").reset_index()) if isinstance(st.session_state.get("bp_override"), pd.DataFrame) else [],
-        }
-        salvar_empresa(empresa_id, payload)
-        st.success(f"Dados salvos: {empresa_nome} ({empresa_id})")
-
-
 # =========================================================
 # CONSTANTES
 # =========================================================
@@ -559,8 +500,10 @@ def consolidar_dre_com_override(dre_df: pd.DataFrame, override_df: pd.DataFrame)
     imposto = get("Imposto de Renda")  # pode ser positivo ou negativo
     lucro_liq = lair + imposto
 
-    # EBITDA = EBIT + D&A (add-back). Como DA é negativo, subtrair DA soma.
-    ebitda = ebit - da
+    # EBITDA = EBIT + D&A - outras operacionais
+    # Se outras operacionais for negativo, soma; se for positivo, subtrai.
+    # Como D&A é negativo, subtrair DA soma (add-back).
+    ebitda = ebit - da - outras_oper
 
     # 3) Escrever totais automáticos
     set_row("Lucro Bruto", lucro_bruto)
@@ -607,19 +550,21 @@ def consolidar_bp_com_override(bp_df: pd.DataFrame, override_df: pd.DataFrame) -
 
     mapa = {
         "Ativo Circulante": [
-            "Caixa e Similares", "Contas a Receber", "Estoques", "Adiantamentos", "Tributos a Recuperar (CP)",
-            "Outros ativos circulantes"
+            "Caixa e Similares", "Contas a Receber (CP)", "Estoques", "Tributos a Recuperar (CP)",
+            "Partes Relacionadas (CP)", "Despesas Antecipadas", "Outros Ativos (CP)"
         ],
         "Ativo Não Circulante": [
-            "Realizável a Longo Prazo", "Tributos a Recuperar (LP)", "Investimentos em Outras Cias",
-            "Imobilizado", "Intangível", "Propriedades para Investimentos"
+            "Contas a Receber (LP)", "Tributos a Recuperar (LP)", "Partes Relacionadas (LP)", "Judiciais",
+            "Outros RLP", "Propriedades para Investimentos", "Ativos de Direito de Uso", "Investimentos",
+            "Imobilizado", "Intangível"
         ],
         "Passivo Circulante": [
-            "Empréstimos e Financiamentos (CP)", "Fornecedores", "Salários",
-            "Impostos e Encargos Sociais", "Outros Passivos Circulantes"
+            "Obrigações Sociais e Trabalhistas", "Fornecedores", "Empréstimos (CP)", "Impostos (CP)",
+            "Partes Relacionadas (CP)", "Passivo de Arrendamento (CP)", "Outros Passivos (CP)"
         ],
         "Passivo Não Circulante": [
-            "Empréstimos e Financiamentos (LP)", "Impostos (LP)", "Outras Contas a Pagar"
+            "Empréstimos e Finan. (LP)", "Tributos (LP)", "Provisões (LP)", "Passivo de Arrendamento (LP)",
+            "Outros Passivos (LP)"
         ],
         "Patrimônio Líquido": [
             "Capital Social", "Reserva de Lucros", "Resultados Acumulados"
@@ -744,7 +689,7 @@ with tab1:
     # -----------------------------------------------------
     # SUBABAS
     # -----------------------------------------------------
-    subtab_edit, subtab_view, subtab_cashflow = st.tabs(["✍️ Preenchimento", "👁️ Visualização", "💧 Fluxo de Caixa"])
+    subtab_edit, subtab_view, subtab_cashflow, subtab_notes = st.tabs(["✍️ Preenchimento", "👁️ Visualização", "💧 Fluxo de Caixa", "📝 Anotações"])
 
     # =====================================================
     # SUBABA — PREENCHIMENTO
@@ -843,32 +788,41 @@ with tab1:
 
         balanco_contas = [
             "Caixa e Similares",
-            "Contas a Receber",
+            "Contas a Receber (CP)",
             "Estoques",
-            "Adiantamentos",
             "Tributos a Recuperar (CP)",
-            "Outros ativos circulantes",
+            "Partes Relacionadas (CP)",
+            "Despesas Antecipadas",
+            "Outros Ativos (CP)",
             "Ativo Circulante",
             " ",
-            "Realizável a Longo Prazo",
+            "Contas a Receber (LP)",
             "Tributos a Recuperar (LP)",
-            "Investimentos em Outras Cias",
+            "Partes Relacionadas (LP)",
+            "Judiciais",
+            "Outros RLP",
+            "Propriedades para Investimentos",
+            "Ativos de Direito de Uso",
+            "Investimentos",
             "Imobilizado",
             "Intangível",
-            "Propriedades para Investimentos",
             "Ativo Não Circulante",
             "Ativo Total",
             " ",
-            "Empréstimos e Financiamentos (CP)",
+            "Obrigações Sociais e Trabalhistas",
             "Fornecedores",
-            "Salários",
-            "Impostos e Encargos Sociais",
-            "Outros Passivos Circulantes",
+            "Empréstimos (CP)",
+            "Impostos (CP)",
+            "Partes Relacionadas (CP)",
+            "Passivo de Arrendamento (CP)",
+            "Outros Passivos (CP)",
             "Passivo Circulante",
             " ",
-            "Empréstimos e Financiamentos (LP)",
-            "Impostos (LP)",
-            "Outras Contas a Pagar",
+            "Empréstimos e Finan. (LP)",
+            "Tributos (LP)",
+            "Provisões (LP)",
+            "Passivo de Arrendamento (LP)",
+            "Outros Passivos (LP)",
             "Passivo Não Circulante",
             " ",
             "Capital Social",
@@ -904,7 +858,7 @@ with tab1:
             disabled=["Conta"],
             num_rows="fixed",
             use_container_width=True,
-            height=altura_dataframe(st.session_state["bp_raw"]),
+            height=altura_dataframe(st.session_state["bp_raw"], max_altura=5000),
             key="bp_editor"
         )
         st.session_state["bp_raw"] = bp_raw.copy()
@@ -925,7 +879,7 @@ with tab1:
             disabled=["Conta"],
             num_rows="fixed",
             use_container_width=True,
-            height=altura_dataframe(st.session_state["bp_override"].reset_index()),
+            height=altura_dataframe(st.session_state["bp_override"].reset_index(), max_altura=5000),
             key="bp_override_editor"
         ).set_index("Conta")
 
@@ -982,6 +936,10 @@ with tab1:
                 conta = str(row["Conta"]) if row["Conta"] is not None else ""
                 if conta.strip() == "":
                     return ["background-color: white"] * len(row)
+                if row["Conta"] in ["Ativo Total", "Passivo Total"]:
+                    return ["background-color: #1f3a5f; color: white; font-weight: bold"] * len(row)
+                if row["Conta"] in ["Ativo Circulante", "Ativo Não Circulante", "Passivo Circulante", "Passivo Não Circulante", "Patrimônio Líquido"]:
+                    return ["background-color: #f2f2f2; font-weight: bold"] * len(row)
                 if row["Conta"] in contas_consolidadoras_bp_view:
                     return ["font-weight: bold"] * len(row)
                 return [""] * len(row)
@@ -991,15 +949,142 @@ with tab1:
         st.markdown("### Balanço Patrimonial — Estrutura (com consolidação automática)")
 
         df_bp_view = st.session_state.get("balanco_df", pd.DataFrame(columns=["Conta"] + anos))
-        df_bp_show = df_bp_view.copy()
-        mask_sep = df_bp_show["Conta"].astype(str).str.strip() == ""
-        for a in anos:
-            df_bp_show.loc[mask_sep, a] = np.nan
-        st.dataframe(
-            formatar_apenas_valores(destacar_bp(df_bp_show)),
-            use_container_width=True,
-            height=altura_dataframe(df_bp_show)
+        modo_bp = st.selectbox(
+            "Visualização do BP",
+            ["Tabela (padrão)", "Visual (último ano)"],
+            index=0,
+            key="bp_view_mode"
         )
+
+        if modo_bp == "Tabela (padrão)":
+            df_bp_show = df_bp_view.copy()
+            mask_sep = df_bp_show["Conta"].astype(str).str.strip() == ""
+            for a in anos:
+                df_bp_show.loc[mask_sep, a] = np.nan
+
+            st.dataframe(
+                formatar_apenas_valores(destacar_bp(df_bp_show)),
+                use_container_width=True,
+                height=altura_dataframe(df_bp_show, max_altura=5000)
+            )
+        else:
+            # Visual apenas do último ano disponível
+            ultimo = None
+            for a in reversed(anos):
+                col = pd.to_numeric(df_bp_view[a], errors="coerce").fillna(0.0)
+                if float(col.abs().sum()) != 0.0:
+                    ultimo = a
+                    break
+            if ultimo is None:
+                ultimo = anos[-1]
+
+            ac_v = get_val(df_bp_view, "Ativo Circulante", ultimo)
+            anc_v = get_val(df_bp_view, "Ativo Não Circulante", ultimo)
+            at_v = get_val(df_bp_view, "Ativo Total", ultimo) or (ac_v + anc_v)
+            pc_v = get_val(df_bp_view, "Passivo Circulante", ultimo)
+            pnc_v = get_val(df_bp_view, "Passivo Não Circulante", ultimo)
+            pl_v = get_val(df_bp_view, "Patrimônio Líquido", ultimo)
+            pt_v = get_val(df_bp_view, "Passivo Total", ultimo) or (pc_v + pnc_v + pl_v)
+
+            ncg = ac_v - pc_v
+            cdg = (pnc_v + pl_v) - anc_v
+            saldo_tes = cdg - ncg
+            st.markdown(f"#### Balanco Visual - {ultimo}")
+
+            def _fmt_brl(v):
+                return f"R$ {v:,.0f}"
+
+            def _flex(v):
+                return max(float(v), 0.0)
+
+            w_ac = _flex(ac_v)
+            w_anc = _flex(anc_v)
+            w_pc = _flex(pc_v)
+            w_pnc = _flex(pnc_v)
+            w_pl = _flex(pl_v)
+
+            if (w_ac + w_anc) == 0:
+                w_ac = w_anc = 1.0
+            if (w_pc + w_pnc + w_pl) == 0:
+                w_pc = w_pnc = w_pl = 1.0
+
+            st.markdown(
+                f"""
+<style>
+.bp-visual-wrap {{
+  display: flex;
+  gap: 16px;
+}}
+.bp-col {{
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  height: 320px;
+  border: 2px solid #2b2b2b;
+}}
+.bp-box {{
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  font-weight: 700;
+  font-size: 18px;
+  border-bottom: 2px solid #2b2b2b;
+  min-height: 56px;
+  padding: 6px 8px;
+  line-height: 1.15;
+}}
+.bp-box:last-child {{
+  border-bottom: none;
+}}
+.bp-box span {{
+  font-weight: 600;
+  font-size: 15px;
+}}
+.bp-ac {{ background: #bcdcf3; }}
+.bp-anc {{ background: #a8cbe8; }}
+.bp-pc {{ background: #f2c1c1; }}
+.bp-pnc {{ background: #e6a9a9; }}
+.bp-pl {{ background: #c9e7c1; }}
+.bp-labels {{
+  display: flex;
+  gap: 16px;
+  margin-top: 8px;
+}}
+.bp-label {{
+  flex: 1;
+  text-align: center;
+  font-weight: 600;
+}}
+</style>
+<div class="bp-visual-wrap">
+  <div class="bp-col">
+    <div class="bp-box bp-ac" style="flex:{w_ac};">AC<br><span>{_fmt_brl(ac_v)}</span></div>
+    <div class="bp-box bp-anc" style="flex:{w_anc};">ANC<br><span>{_fmt_brl(anc_v)}</span></div>
+  </div>
+  <div class="bp-col">
+    <div class="bp-box bp-pc" style="flex:{w_pc};">PC<br><span>{_fmt_brl(pc_v)}</span></div>
+    <div class="bp-box bp-pnc" style="flex:{w_pnc};">PNC<br><span>{_fmt_brl(pnc_v)}</span></div>
+    <div class="bp-box bp-pl" style="flex:{w_pl};">PL<br><span>{_fmt_brl(pl_v)}</span></div>
+  </div>
+</div>
+<div class="bp-labels">
+  <div class="bp-label">Ativo Total: {_fmt_brl(at_v)}</div>
+  <div class="bp-label">Passivo Total: {_fmt_brl(pt_v)}</div>
+</div>
+""",
+                unsafe_allow_html=True
+            )
+
+            st.divider()
+
+            st.markdown("**Avisos de financiamento**")
+            if saldo_tes >= 0:
+                st.success("Longo prazo (PNC + PL) financia o capital de giro.")
+            else:
+                st.warning("Curto prazo financia parte do capital de giro.")
+            if ac_v < pc_v:
+                st.info("Passivos circulantes superam ativos circulantes.")
 
 
     with subtab_cashflow:
@@ -1016,6 +1101,23 @@ with tab1:
                 "Modelo gerencial (indireto) construído a partir de DRE + BP. "
                 "CFI e CFF são proxies por variação patrimonial; a conciliação com a variação de Caixa mostra a diferença."
             )
+            st.markdown("#### Override (manual)")
+            st.caption("Se preencher FCO/FCI/FCF, o valor manual substitui o calculado para o ano correspondente.")
+
+            contas_override_fc = ["FCO", "FCI", "FCF"]
+            if "fc_override" not in st.session_state:
+                st.session_state["fc_override"] = criar_override_df(contas_override_fc, anos)
+
+            fc_override = st.data_editor(
+                st.session_state["fc_override"].reset_index(),
+                disabled=["Conta"],
+                num_rows="fixed",
+                use_container_width=True,
+                height=altura_dataframe(st.session_state["fc_override"].reset_index(), max_altura=5000),
+                key="fc_override_editor"
+            ).set_index("Conta")
+
+            st.session_state["fc_override"] = fc_override.copy()
 
             # -------------------------------------------------
             # Monta FC para 5 períodos: Ano2-Ano1 ... Ano6-Ano5
@@ -1042,76 +1144,101 @@ with tab1:
                 # ---------
                 d_caixa = delta(bp_df, "Caixa e Similares", a_atual, a_ant)
 
-                # Ativo Circulante operacional (sem caixa) — aumento consome caixa
-                d_cr   = delta(bp_df, "Contas a Receber", a_atual, a_ant)
-                d_est  = delta(bp_df, "Estoques", a_atual, a_ant)
-                d_adi  = delta(bp_df, "Adiantamentos", a_atual, a_ant)
-                d_out_ac = delta(bp_df, "Outros ativos circulantes", a_atual, a_ant)
+                # Ativo circulante/longa duração operacional (sem caixa) — aumento consome caixa
+                d_cr = delta(bp_df, "Contas a Receber (CP)", a_atual, a_ant)
+                d_est = delta(bp_df, "Estoques", a_atual, a_ant)
+                d_trib = delta(bp_df, "Tributos a Recuperar (CP)", a_atual, a_ant)
+                d_pr_cp = delta(bp_df, "Partes Relacionadas (CP)", a_atual, a_ant)
+                d_adi = delta(bp_df, "Despesas Antecipadas", a_atual, a_ant)
+                d_out_ac = delta(bp_df, "Outros Ativos (CP)", a_atual, a_ant)
+                d_cr_lp = delta(bp_df, "Contas a Receber (LP)", a_atual, a_ant)
+                d_trib_lp_ac = delta(bp_df, "Tributos a Recuperar (LP)", a_atual, a_ant)
+                d_pr_lp = delta(bp_df, "Partes Relacionadas (LP)", a_atual, a_ant)
+                d_jud = delta(bp_df, "Judiciais", a_atual, a_ant)
+                d_rlp = delta(bp_df, "Outros RLP", a_atual, a_ant)
 
-                # Passivo circulante operacional — aumento gera caixa
+                # Passivo operacional (CP/LP) — aumento gera caixa
                 d_forn = delta(bp_df, "Fornecedores", a_atual, a_ant)
-                d_sal  = delta(bp_df, "Salários", a_atual, a_ant)
-                d_imp  = delta(bp_df, "Impostos e Encargos Sociais", a_atual, a_ant)
-                d_out_pc = delta(bp_df, "Outros Passivos Circulantes", a_atual, a_ant)
+                d_imp_cp = delta(bp_df, "Impostos (CP)", a_atual, a_ant)
+                d_pr_pc = delta(bp_df, "Partes Relacionadas (CP)", a_atual, a_ant)
+                d_trib_lp_psv = delta(bp_df, "Tributos (LP)", a_atual, a_ant)
+                d_prov_lp = delta(bp_df, "Provisões (LP)", a_atual, a_ant)
+                d_out_lp = delta(bp_df, "Outros Passivos (LP)", a_atual, a_ant)
 
-                # Dívida (financiamento) — aumentos geram caixa
-                d_div_cp = delta(bp_df, "Empréstimos e Financiamentos (CP)", a_atual, a_ant)
-                d_div_lp = delta(bp_df, "Empréstimos e Financiamentos (LP)", a_atual, a_ant)
-                d_divida = d_div_cp + d_div_lp
+                # Financiamento — aumentos geram caixa
+                d_div_cp = delta(bp_df, "Empréstimos (CP)", a_atual, a_ant)
+                d_arr_cp = delta(bp_df, "Passivo de Arrendamento (CP)", a_atual, a_ant)
+                d_div_lp = delta(bp_df, "Empréstimos e Finan. (LP)", a_atual, a_ant)
+                d_arr_lp = delta(bp_df, "Passivo de Arrendamento (LP)", a_atual, a_ant)
+                d_cap = delta(bp_df, "Capital Social", a_atual, a_ant)
 
-                # Ativo não circulante (proxy de investimento)
-                d_invest = delta(bp_df, "Investimentos em Outras Cias", a_atual, a_ant)
-                d_imob   = delta(bp_df, "Imobilizado", a_atual, a_ant)
+                # Investimentos
+                d_imob = delta(bp_df, "Imobilizado", a_atual, a_ant)
                 d_intang = delta(bp_df, "Intangível", a_atual, a_ant)
-                d_prop   = delta(bp_df, "Propriedades para Investimentos", a_atual, a_ant)
-                d_anc_proxy = d_invest + d_imob + d_intang + d_prop
-
-                # Patrimônio líquido (proxy de captação/retorno ao acionista)
-                d_cap  = delta(bp_df, "Capital Social", a_atual, a_ant)
-                d_res  = delta(bp_df, "Reserva de Lucros", a_atual, a_ant)
-                d_ret  = delta(bp_df, "Resultados Acumulados", a_atual, a_ant)
-                d_pl_proxy = d_cap + d_res + d_ret
+                d_prop = delta(bp_df, "Propriedades para Investimentos", a_atual, a_ant)
 
                 # -------------------------------------------------
-                # CFO (Indireto) — básico e robusto
+                # CFO (Indireto) - basico e robusto
                 # -------------------------------------------------
-                delta_wc = (d_cr + d_est + d_adi + d_out_ac) - (d_forn + d_sal + d_imp + d_out_pc)
+                delta_wc = (
+                    d_cr + d_est + d_trib + d_pr_cp + d_adi + d_out_ac +
+                    d_cr_lp + d_trib_lp_ac + d_pr_lp + d_jud + d_rlp
+                ) - (
+                    d_forn + d_imp_cp + d_pr_pc + d_trib_lp_psv + d_prov_lp + d_out_lp
+                )
                 # Aumento de WC consome caixa (subtrai)
-                cfo = ll + da_addback - delta_wc
+                ir_val = get_val(dre_df, "Imposto de Renda", a_atual)
+                ir_cf = float(ir_val) if float(ir_val) > 0 else 0.0
+                cfo = ll + da_addback - ir_cf - delta_wc
 
                 # -------------------------------------------------
-                # CFI (Investimentos) — proxy pela variação do ANC
+                # CFI (Investimentos) - proxy pela variacao do ANC
                 # Se ANC aumenta => consumo de caixa => negativo
                 # -------------------------------------------------
-                cfi = -d_anc_proxy
+                cfi = -(d_imob + d_intang + d_prop)
 
                 # -------------------------------------------------
-                # CFF (Financiamentos) — proxy por dívida + PL
-                # Aumento dívida/PL => entrada de caixa => positivo
+                # CFF (Finan.) - proxy por divida + PL
+                # Aumento divida/PL => entrada de caixa => positivo
                 # -------------------------------------------------
-                cff = d_divida + d_pl_proxy
+                cff = d_div_cp + d_arr_cp + d_div_lp + d_arr_lp + d_cap
 
-                # Variação de caixa "calculada"
+                # Override manual (por ano corrente)
+                if isinstance(fc_override, pd.DataFrame):
+                    if "FCO" in fc_override.index and a_atual in fc_override.columns:
+                        v = pd.to_numeric(fc_override.loc["FCO", a_atual], errors="coerce")
+                        if pd.notna(v):
+                            cfo = float(v)
+                    if "FCI" in fc_override.index and a_atual in fc_override.columns:
+                        v = pd.to_numeric(fc_override.loc["FCI", a_atual], errors="coerce")
+                        if pd.notna(v):
+                            cfi = float(v)
+                    if "FCF" in fc_override.index and a_atual in fc_override.columns:
+                        v = pd.to_numeric(fc_override.loc["FCF", a_atual], errors="coerce")
+                        if pd.notna(v):
+                            cff = float(v)
+
+                # Variacao de caixa "calculada"
                 d_caixa_calc = cfo + cfi + cff
 
                 linhas.append({
-                    "Período": periodo,
-                    "Lucro Líquido (DRE)": ll,
+                    "Periodo": periodo,
+                    "Lucro Liquido (DRE)": ll,
                     "D&A": da_addback,
-                    "Δ Ativo Circulante": delta_wc,
+                    "Delta Capital de Giro": delta_wc,
                     "Fluxo de Caixa Operacional": cfo,
-                    "Fluxo de Caixa de Invesimento (Δ ANC)": cfi,
+                    "Fluxo de Caixa de Investimento": cfi,
                     "Fluxo de Caixa de Financiamento": cff,
-                    "Δ Caixa (calculado)": d_caixa_calc,
-                    "Δ Caixa (BP)": d_caixa,
-                    "Diferença (calc - BP)": d_caixa_calc - d_caixa
+                    "Delta Caixa (calculado)": d_caixa_calc,
+                    "Delta Caixa (BP)": d_caixa,
+                    "Diferenca (calc - BP)": d_caixa_calc - d_caixa
                 })
 
             df_fc = pd.DataFrame(linhas)
 
             df_fc_t = (
                 df_fc
-                .set_index("Período")
+                .set_index("Periodo")
                 .T
                 .reset_index()
                 .rename(columns={"index": "Conta"})
@@ -1125,16 +1252,29 @@ with tab1:
                 height=min(900, 40 + 35 * (len(df_fc_t) + 2))
             )
 
-
             st.divider()
-            st.markdown("#### Leitura rápida")
+            st.markdown("#### Leitura rapida")
             st.write(
-                "- **CFO**: lucro líquido somado por D&A e variação do capital de giro (Δ AC).\n"
-                "- **CFI**: proxy por variação do Ativo Não Circulante.\n"
-                "- **CFF**: proxy por variação de dívida e PL.\n"
-                "- **Diferença**: mostra o quanto o modelo gerencial diverge da variação de caixa do BP."
+                "- **CFO**: lucro liquido somado por D&A e variacao do capital de giro (Delta AC).\n"
+                "- **CFI**: proxy por variacao do Ativo Nao Circulante.\n"
+                "- **CFF**: proxy por variacao de divida e PL.\n"
+                "- **Diferenca**: mostra o quanto o modelo gerencial diverge da variacao de caixa do BP."
             )
 
+
+    with subtab_notes:
+        st.subheader("Anotações do Analista")
+        st.caption("Espaco livre para registrar observações sobre o BP e a DRE. ")
+
+        if "analyst_notes" not in st.session_state:
+            st.session_state["analyst_notes"] = ""
+
+        notes = st.text_area(
+            "Bloco de Notas",
+            value=st.session_state.get("analyst_notes", ""),
+            height=280
+        )
+        st.session_state["analyst_notes"] = notes
 
 
 # =========================================================
@@ -1231,24 +1371,29 @@ with tab2:
             da       = get_serie(dre_df, "Depreciação & Amortização").abs() # módulo
 
             caixa = get_serie(bp_df, "Caixa e Similares")
-            cr    = get_serie(bp_df, "Contas a Receber")
+            cr    = get_serie(bp_df, "Contas a Receber (CP)")
+            trib  = get_serie(bp_df, "Tributos a Recuperar (CP)")
+            pr_cp = get_serie(bp_df, "Partes Relacionadas (CP)")
             est   = get_serie(bp_df, "Estoques")
-            adi   = get_serie(bp_df, "Adiantamentos")
+            adi   = get_serie(bp_df, "Despesas Antecipadas")
+            out_ac = get_serie(bp_df, "Outros Ativos (CP)")
 
             ac    = get_serie(bp_df, "Ativo Circulante")
             anc   = get_serie(bp_df, "Ativo Não Circulante")
 
             forn  = get_serie(bp_df, "Fornecedores")
-            sal   = get_serie(bp_df, "Salários")
-            impcp = get_serie(bp_df, "Impostos e Encargos Sociais")
+            sal   = get_serie(bp_df, "Obrigações Sociais e Trabalhistas")
+            pr_pc = get_serie(bp_df, "Partes Relacionadas (CP)")
+            arr_cp = get_serie(bp_df, "Passivo de Arrendamento (CP)")
+            impcp = get_serie(bp_df, "Impostos (CP)")
 
             pc    = get_serie(bp_df, "Passivo Circulante")
             pnc   = get_serie(bp_df, "Passivo Não Circulante")
             pl    = get_serie(bp_df, "Patrimônio Líquido")
 
             # Dívida (proxy)
-            div_cp = get_serie(bp_df, "Empréstimos e Financiamentos (CP)")
-            div_lp = get_serie(bp_df, "Empréstimos e Financiamentos (LP)")
+            div_cp = get_serie(bp_df, "Empréstimos (CP)")
+            div_lp = get_serie(bp_df, "Empréstimos e Finan. (LP)")
             div_total = div_cp + div_lp
             div_liq   = div_total - caixa
 
@@ -1256,11 +1401,11 @@ with tab2:
             # Tesouraria (Fleuriet)
             # CPL = (PNC + PL) - ANC
             # IOG = ACC - PCC
-            # ACC = CR + Estoques + Adiantamentos
+            # ACC = CR + Estoques + Tributos + Partes Relacionadas + Despesas Antecipadas + Outros
             # PCC = Forn + Sal + Impostos Encargos
             # -----------------------------
-            acc = cr + est + adi
-            pcc = forn + sal + impcp
+            acc = cr + est + trib + pr_cp + adi + out_ac
+            pcc = forn + sal + impcp + pr_pc + arr_cp
             iog = acc - pcc
             cpl = (pnc + pl) - anc
             saldo_tes = iog - cpl
@@ -1284,7 +1429,7 @@ with tab2:
             # NOPAT = EBIT * (1 - alíquota)
             # Capital Investido (proxy) = IOG + ANC
             # -----------------------------
-            ir_eff = st.number_input("Alíquota efetiva para ROIC (IR/CSLL) %", value=34.0, step=1.0) / 100.0
+            ir_eff = st.session_state.get("tax_wacc", 0.34)
 
             def _safe_div_scalar(n, d):
                 try:
@@ -1441,28 +1586,7 @@ with tab2:
 
             st.plotly_chart(fig, use_container_width=True)
 
-            # ----------------------------
-            # Cards de CAGR (pontos importantes)
-            # ----------------------------
-            st.divider()
-            st.markdown("#### CAGR — pontos-chave (do primeiro ao último ano preenchido)")
-
-            cagr_series = {
-                "Faturamento (Receita)": receita,
-                "EBITDA": ebitda,
-                "Lucro Líquido": lucroliq,
-                "Caixa": caixa,
-                "Dívida Total": div_total,
-                "Dívida Líquida": div_liq,
-            }
-
-            cards = st.columns(6)
-            for i, (nome, s) in enumerate(cagr_series.items()):
-                v0, v1, nint = first_last_and_nint(s)
-                g = cagr(v0, v1, nint)
-                txt = "n/a" if g is None else f"{g*100:,.1f}%"
-                cards[i].metric(nome, txt, help="CAGR do primeiro ao último período preenchido (valores > 0).")
-
+           
         # =================================================
         # SUBABA 1 — Vertical & Horizontal
         # =================================================
@@ -1497,6 +1621,8 @@ with tab2:
                     "EBITDA",
 
                 }
+                contas_totais = set()
+
 
             else:
 
@@ -1537,6 +1663,8 @@ with tab2:
                     "Passivo Total",
 
                 }
+                contas_totais = {"Ativo Total", "Passivo Total"}
+
 
             for a in anos:
 
@@ -1614,6 +1742,10 @@ with tab2:
                     .avah-table th:first-child, .avah-table td:first-child { width: 200px; }
 
                     .avah-bold td { font-weight: 700; }
+                    .avah-major td { background: #f2f2f2; font-weight: 700; }
+                    .avah-total td { background: #1f3a5f; color: #ffffff; font-weight: 700; }
+                    .avah-total .avah-value { color: #ffffff; }
+                    .avah-total .avah-bar-text { color: #0f1f2e; text-shadow: 0 1px 0 rgba(255, 255, 255, 0.7); }
 
                     .avah-value { font-weight: 600; margin-bottom: 4px; }
 
@@ -1676,6 +1808,10 @@ with tab2:
                         continue
 
                     row_class = "avah-bold" if conta in contas_bold else ""
+                    if conta in contas_totais:
+                        row_class = (row_class + " avah-total").strip()
+                    elif conta in contas_bold:
+                        row_class = (row_class + " avah-major").strip()
 
                     row_html = f"<tr class='{row_class}'><td class='avah-conta'>{html.escape(str(conta_raw))}</td>"
 
@@ -1825,7 +1961,7 @@ with tab2:
 
                 abs_var = df_base[a_now] - df_base[a_prev]
 
-                pct_var = safe_div(abs_var.values, df_base[a_prev].values) * 100.0
+                pct_var = safe_div(abs_var.values, np.abs(df_base[a_prev].values)) * 100.0
 
                 df_hpct[a_now] = pct_var
 
@@ -1869,9 +2005,13 @@ with tab2:
             receita = get_serie(dre_df, "Receita Líquida")
             cmv = get_serie(dre_df, "CMV, CPV ou CSP").abs()
 
-            cr = get_serie(bp_df, "Contas a Receber")
+            cr = get_serie(bp_df, "Contas a Receber (CP)")
             est = get_serie(bp_df, "Estoques")
             forn = get_serie(bp_df, "Fornecedores")
+            sal  = get_serie(bp_df, "Obrigações Sociais e Trabalhistas")
+            imp  = get_serie(bp_df, "Impostos (CP)")
+            pr_pc = get_serie(bp_df, "Partes Relacionadas (CP)")
+            arr_cp = get_serie(bp_df, "Passivo de Arrendamento (CP)")
 
             def safe_div_scalar(n, d):
                 try:
@@ -1986,10 +2126,16 @@ with tab2:
             ))
 
             max_x = max(1.0, cop_u, cfi_u, x_recebimento)  # usa recebimento como referência do topo
+            min_x = min(0.0, cfi_u, x_fim_ciclo_fin)
             fig_regua.update_layout(
                 height=320,
                 barmode="overlay",
-                xaxis=dict(title="Dias (a partir do pagamento ao fornecedor)", range=[0, max_x * 1.10]),
+                xaxis=dict(
+                    title="Dias (a partir do pagamento ao fornecedor)",
+                    range=[min_x * 1.10, max_x * 1.10],
+                    zeroline=True,
+                    zerolinecolor="#999"
+                ),
                 yaxis=dict(title="", showticklabels=True),
                 margin=dict(l=10, r=10, t=80, b=10),
                 legend=dict(orientation="h", yanchor="bottom", y=1.15, xanchor="left", x=0)
@@ -2123,13 +2269,18 @@ with tab2:
                     return pd.to_numeric(out, errors="coerce").fillna(0.0)
 
                 # Séries do BP
-                cr   = get_serie(bp_df, "Contas a Receber")
+                cr   = get_serie(bp_df, "Contas a Receber (CP)")
                 est  = get_serie(bp_df, "Estoques")
-                adi  = get_serie(bp_df, "Adiantamentos")
+                trib = get_serie(bp_df, "Tributos a Recuperar (CP)")
+                pr_cp = get_serie(bp_df, "Partes Relacionadas (CP)")
+                adi  = get_serie(bp_df, "Despesas Antecipadas")
+                out_ac = get_serie(bp_df, "Outros Ativos (CP)")
 
                 forn = get_serie(bp_df, "Fornecedores")
-                sal  = get_serie(bp_df, "Salários")
-                imp  = get_serie(bp_df, "Impostos e Encargos Sociais")
+                sal  = get_serie(bp_df, "Obrigações Sociais e Trabalhistas")
+                imp  = get_serie(bp_df, "Impostos (CP)")
+                pr_pc = get_serie(bp_df, "Partes Relacionadas (CP)")
+                arr_cp = get_serie(bp_df, "Passivo de Arrendamento (CP)")
 
                 anc  = get_serie(bp_df, "Ativo Não Circulante")
                 pnc  = get_serie(bp_df, "Passivo Não Circulante")
@@ -2139,8 +2290,8 @@ with tab2:
                 vendas = get_serie(dre_df, "Receita Líquida")
 
                 # Definições (como você passou)
-                acc = cr + est + adi
-                pcc = forn + sal + imp
+                acc = cr + est + trib + pr_cp + adi + out_ac
+                pcc = forn + sal + imp + pr_pc + arr_cp
                 iog = acc - pcc
 
                 cpl = (pnc + pl) - anc
@@ -2154,7 +2305,9 @@ with tab2:
                     "ACC (CR + Estoques + Adiant.)": acc,
                     "PCC (Forn + Sal + Imp)": pcc,
                     "IOG (ACC - PCC)": iog,
+                    "NCG (ACC - PCC)": iog,
                     "CPL ((PNC + PL) - ANC)": cpl,
+                    "CDG ((PNC + PL) - ANC)": cpl,
                     "Saldo de Tesouraria (IOG - CPL)": saldo_tes,
                 }).T
                 df_tes.columns = anos
@@ -2253,6 +2406,7 @@ with tab2:
                 beta = st.number_input("Beta da empresa", value=1.0, step=0.05)
             with c4:
                 tax = st.number_input("Alíquota de IR/CSLL %", value=34.0, step=1.0) / 100.0
+                st.session_state["tax_wacc"] = tax
 
             kd = st.number_input("Custo médio da dívida (Kd) % a.a.", value=12.0, step=0.25) / 100.0
 
@@ -2262,8 +2416,8 @@ with tab2:
             # Séries base (BP / DRE)
             # -----------------------------
             # Dívida bruta (proxy = empréstimos CP + LP) e PL
-            div_cp = get_serie(bp_df, "Empréstimos e Financiamentos (CP)")
-            div_lp = get_serie(bp_df, "Empréstimos e Financiamentos (LP)")
+            div_cp = get_serie(bp_df, "Empréstimos (CP)")
+            div_lp = get_serie(bp_df, "Empréstimos e Finan. (LP)")
             debt = div_cp + div_lp
 
             equity = get_serie(bp_df, "Patrimônio Líquido")
@@ -2272,16 +2426,21 @@ with tab2:
             ebit = get_serie(dre_df, "Lucro Operacional - EBIT")
 
             # Capital investido (proxy coerente com seu Fleuriet)
-            cr   = get_serie(bp_df, "Contas a Receber")
+            cr   = get_serie(bp_df, "Contas a Receber (CP)")
             est  = get_serie(bp_df, "Estoques")
-            adi  = get_serie(bp_df, "Adiantamentos")
-            forn = get_serie(bp_df, "Fornecedores")
-            sal  = get_serie(bp_df, "Salários")
-            imp  = get_serie(bp_df, "Impostos e Encargos Sociais")
-            anc  = get_serie(bp_df, "Ativo Não Circulante")
+            trib = get_serie(bp_df, "Tributos a Recuperar (CP)")
+            pr_cp = get_serie(bp_df, "Partes Relacionadas (CP)")
+            adi  = get_serie(bp_df, "Despesas Antecipadas")
+            out_ac = get_serie(bp_df, "Outros Ativos (CP)")
 
-            acc = cr + est + adi
-            pcc = forn + sal + imp
+            forn = get_serie(bp_df, "Fornecedores")
+            sal  = get_serie(bp_df, "Obrigações Sociais e Trabalhistas")
+            imp  = get_serie(bp_df, "Impostos (CP)")
+            pr_pc = get_serie(bp_df, "Partes Relacionadas (CP)")
+            arr_cp = get_serie(bp_df, "Passivo de Arrendamento (CP)")
+
+            acc = cr + est + trib + pr_cp + adi + out_ac
+            pcc = forn + sal + imp + pr_pc + arr_cp
             iog = acc - pcc
 
             # NOPAT e ROIC
@@ -2517,20 +2676,27 @@ with tab3:
         receita = float(get_serie_local(dre_df, "Receita Líquida").get(ano_ref, 0.0))
         cmv_abs = float(get_serie_local(dre_df, "CMV, CPV ou CSP").abs().get(ano_ref, 0.0))
 
-        cr   = float(get_serie_local(bp_df, "Contas a Receber").get(ano_ref, 0.0))
+        cr   = float(get_serie_local(bp_df, "Contas a Receber (CP)").get(ano_ref, 0.0))
         est  = float(get_serie_local(bp_df, "Estoques").get(ano_ref, 0.0))
+        trib = float(get_serie_local(bp_df, "Tributos a Recuperar (CP)").get(ano_ref, 0.0))
+        pr_cp = float(get_serie_local(bp_df, "Partes Relacionadas (CP)").get(ano_ref, 0.0))
+        adi  = float(get_serie_local(bp_df, "Despesas Antecipadas").get(ano_ref, 0.0))
+        out_ac = float(get_serie_local(bp_df, "Outros Ativos (CP)").get(ano_ref, 0.0))
 
         forn = float(get_serie_local(bp_df, "Fornecedores").get(ano_ref, 0.0))
-        sal  = float(get_serie_local(bp_df, "Salários").get(ano_ref, 0.0))
-        imp  = float(get_serie_local(bp_df, "Impostos e Encargos Sociais").get(ano_ref, 0.0))
+        sal  = float(get_serie_local(bp_df, "Obrigações Sociais e Trabalhistas").get(ano_ref, 0.0))
+        imp  = float(get_serie_local(bp_df, "Impostos (CP)").get(ano_ref, 0.0))
+        pr_pc = float(get_serie_local(bp_df, "Partes Relacionadas (CP)").get(ano_ref, 0.0))
+        arr_cp = float(get_serie_local(bp_df, "Passivo de Arrendamento (CP)").get(ano_ref, 0.0))
+        out_pc = float(get_serie_local(bp_df, "Outros Passivos (CP)").get(ano_ref, 0.0))
 
-        div_cp = float(get_serie_local(bp_df, "Empréstimos e Financiamentos (CP)").get(ano_ref, 0.0))
-        div_lp = float(get_serie_local(bp_df, "Empréstimos e Financiamentos (LP)").get(ano_ref, 0.0))
+        div_cp = float(get_serie_local(bp_df, "Empréstimos (CP)").get(ano_ref, 0.0))
+        div_lp = float(get_serie_local(bp_df, "Empréstimos e Finan. (LP)").get(ano_ref, 0.0))
         div_total = div_cp + div_lp
 
         # Ativos e passivos cíclicos (como você definiu antes)
-        acc_val = cr + est
-        pcc_val = forn + sal + imp
+        acc_val = cr + est + trib + pr_cp + adi + out_ac
+        pcc_val = forn + sal + imp + pr_pc + arr_cp + out_pc
         iog_val = acc_val - pcc_val
 
         c1, c2, c3 = st.columns(3)
@@ -2582,7 +2748,7 @@ with tab3:
         # Proporção do ACC em relação ao "nível operacional" (cmv/receita ajuda a calibrar, mas pode ser ruim se receita=0)
         # Aqui usamos o próprio BP como tamanho-alvo; a matriz é exposição, então é razoável distribuir o ACC/PCC pelo ciclo.
         # Parte do ACC que é estoque vs CR (usamos peso do BP)
-        acc_component = est + cr
+        acc_component = est + cr + trib + pr_cp + adi + out_ac
         w_est = safe_div_scalar(est, acc_component) if acc_component else np.nan
         w_cr  = safe_div_scalar(cr,  acc_component) if acc_component else np.nan
 
@@ -2590,9 +2756,9 @@ with tab3:
         if not np.isfinite(w_cr):  w_cr  = 0.5
 
         # Passivos cíclicos: fornecedores vs (sal+imp)
-        pcc_component = forn + sal + imp
+        pcc_component = forn + sal + imp + pr_pc + arr_cp + out_pc
         w_forn = safe_div_scalar(forn, pcc_component) if pcc_component else np.nan
-        w_folha = safe_div_scalar((sal + imp), pcc_component) if pcc_component else np.nan
+        w_folha = safe_div_scalar((sal + imp + pr_pc + arr_cp + out_pc), pcc_component) if pcc_component else np.nan
 
         if not np.isfinite(w_forn):  w_forn = 0.6
         if not np.isfinite(w_folha): w_folha = 0.4
