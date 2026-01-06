@@ -1,0 +1,552 @@
+{
+  "empresa_id": "casas_bahia_final",
+  "empresa_nome": "Casas bahia Final",
+  "dre_raw": [
+    {
+      "Conta": "(+) Receita Líquida",
+      "Ano 1": "28901",
+      "Ano 2": "30899",
+      "Ano 3": "30898",
+      "Ano 4": "28847",
+      "Ano 5": "27206",
+      "Ano 6": ""
+    },
+    {
+      "Conta": "(-) CMV, CPV ou CSP",
+      "Ano 1": "19254",
+      "Ano 2": "21378",
+      "Ano 3": "21460",
+      "Ano 4": "20594",
+      "Ano 5": "18621",
+      "Ano 6": ""
+    },
+    {
+      "Conta": "(=) Lucro Bruto",
+      "Ano 1": "",
+      "Ano 2": "",
+      "Ano 3": "",
+      "Ano 4": "",
+      "Ano 5": "",
+      "Ano 6": ""
+    },
+    {
+      "Conta": "(-) Despesas de Vendas",
+      "Ano 1": "5892",
+      "Ano 2": "7121",
+      "Ano 3": "6160",
+      "Ano 4": "5883",
+      "Ano 5": "5486",
+      "Ano 6": ""
+    },
+    {
+      "Conta": "(-) Despesas gerais e administrativas",
+      "Ano 1": "891",
+      "Ano 2": "1077",
+      "Ano 3": "936",
+      "Ano 4": "1181",
+      "Ano 5": "1195",
+      "Ano 6": ""
+    },
+    {
+      "Conta": "(+/-) Outras despesas/receitas operacionais",
+      "Ano 1": "-333",
+      "Ano 2": "-673",
+      "Ano 3": "-62",
+      "Ano 4": "-1212",
+      "Ano 5": "-322",
+      "Ano 6": ""
+    },
+    {
+      "Conta": "(-) Depreciação & Amortização",
+      "Ano 1": "912",
+      "Ano 2": "993",
+      "Ano 3": "1119",
+      "Ano 4": "1137",
+      "Ano 5": "1072",
+      "Ano 6": ""
+    },
+    {
+      "Conta": "(=) Lucro Operacional - EBIT",
+      "Ano 1": "",
+      "Ano 2": "",
+      "Ano 3": "",
+      "Ano 4": "",
+      "Ano 5": "",
+      "Ano 6": ""
+    },
+    {
+      "Conta": "(+/-) Resultado Financeiro",
+      "Ano 1": "-696",
+      "Ano 2": "-1217",
+      "Ano 3": "-2244",
+      "Ano 4": "-3041",
+      "Ano 5": "-2187",
+      "Ano 6": ""
+    },
+    {
+      "Conta": "(+/-) Outros Resultados Não Operacionais",
+      "Ano 1": "",
+      "Ano 2": "",
+      "Ano 3": "",
+      "Ano 4": "",
+      "Ano 5": "",
+      "Ano 6": ""
+    },
+    {
+      "Conta": "(=) Lucro Antes do IR",
+      "Ano 1": "",
+      "Ano 2": "",
+      "Ano 3": "",
+      "Ano 4": "",
+      "Ano 5": "",
+      "Ano 6": ""
+    },
+    {
+      "Conta": "(+/-) Imposto de Renda",
+      "Ano 1": "81",
+      "Ano 2": "1263",
+      "Ano 3": "741",
+      "Ano 4": "1576",
+      "Ano 5": "632",
+      "Ano 6": ""
+    },
+    {
+      "Conta": "(=) Lucro Líquido",
+      "Ano 1": "",
+      "Ano 2": "",
+      "Ano 3": "",
+      "Ano 4": "",
+      "Ano 5": "",
+      "Ano 6": ""
+    },
+    {
+      "Conta": "EBITDA",
+      "Ano 1": "",
+      "Ano 2": "",
+      "Ano 3": "",
+      "Ano 4": "",
+      "Ano 5": "",
+      "Ano 6": ""
+    }
+  ],
+  "dre_override": [
+    {
+      "Conta": "Lucro Bruto",
+      "Ano 1": NaN,
+      "Ano 2": NaN,
+      "Ano 3": NaN,
+      "Ano 4": NaN,
+      "Ano 5": NaN,
+      "Ano 6": NaN
+    },
+    {
+      "Conta": "Lucro Operacional - EBIT",
+      "Ano 1": NaN,
+      "Ano 2": NaN,
+      "Ano 3": NaN,
+      "Ano 4": NaN,
+      "Ano 5": NaN,
+      "Ano 6": NaN
+    },
+    {
+      "Conta": "Lucro Antes do IR",
+      "Ano 1": NaN,
+      "Ano 2": NaN,
+      "Ano 3": NaN,
+      "Ano 4": NaN,
+      "Ano 5": NaN,
+      "Ano 6": NaN
+    },
+    {
+      "Conta": "Lucro Líquido",
+      "Ano 1": NaN,
+      "Ano 2": NaN,
+      "Ano 3": NaN,
+      "Ano 4": NaN,
+      "Ano 5": NaN,
+      "Ano 6": NaN
+    },
+    {
+      "Conta": "EBITDA",
+      "Ano 1": 2917.0,
+      "Ano 2": 1368.0,
+      "Ano 3": 2382.0,
+      "Ano 4": 1240.0,
+      "Ano 5": 1970.0,
+      "Ano 6": NaN
+    }
+  ],
+  "bp_raw": [
+    {
+      "Conta": "Caixa e Similares",
+      "Ano 1": "2984",
+      "Ano 2": "1781",
+      "Ano 3": "2019",
+      "Ano 4": "2573",
+      "Ano 5": "2414",
+      "Ano 6": ""
+    },
+    {
+      "Conta": "Contas a Receber",
+      "Ano 1": "7907",
+      "Ano 2": "6900",
+      "Ano 3": "6595",
+      "Ano 4": "3588",
+      "Ano 5": "4616",
+      "Ano 6": ""
+    },
+    {
+      "Conta": "Estoques",
+      "Ano 1": "6176",
+      "Ano 2": "7152",
+      "Ano 3": "5574",
+      "Ano 4": "4353",
+      "Ano 5": "4695",
+      "Ano 6": ""
+    },
+    {
+      "Conta": "Adiantamentos",
+      "Ano 1": "281",
+      "Ano 2": "191",
+      "Ano 3": "231",
+      "Ano 4": "248",
+      "Ano 5": "269",
+      "Ano 6": ""
+    },
+    {
+      "Conta": "Tributos a Recuperar (CP)",
+      "Ano 1": "1394",
+      "Ano 2": "1809",
+      "Ano 3": "1827",
+      "Ano 4": "1663",
+      "Ano 5": "1352",
+      "Ano 6": ""
+    },
+    {
+      "Conta": "Outros ativos circulantes",
+      "Ano 1": "506",
+      "Ano 2": "631",
+      "Ano 3": "877",
+      "Ano 4": "926",
+      "Ano 5": "794",
+      "Ano 6": ""
+    },
+    {
+      "Conta": "Ativo Circulante",
+      "Ano 1": "",
+      "Ano 2": "",
+      "Ano 3": "",
+      "Ano 4": "",
+      "Ano 5": "",
+      "Ano 6": ""
+    },
+    {
+      "Conta": " ",
+      "Ano 1": "",
+      "Ano 2": "",
+      "Ano 3": "",
+      "Ano 4": "",
+      "Ano 5": "",
+      "Ano 6": ""
+    },
+    {
+      "Conta": "Realizável a Longo Prazo",
+      "Ano 1": "7457",
+      "Ano 2": "9489",
+      "Ano 3": "10929",
+      "Ano 4": "11555",
+      "Ano 5": "13100",
+      "Ano 6": ""
+    },
+    {
+      "Conta": "Tributos a Recuperar (LP)",
+      "Ano 1": "0",
+      "Ano 2": "",
+      "Ano 3": "",
+      "Ano 4": "",
+      "Ano 5": "",
+      "Ano 6": ""
+    },
+    {
+      "Conta": "Investimentos em Outras Cias",
+      "Ano 1": "206",
+      "Ano 2": "225",
+      "Ano 3": "265",
+      "Ano 4": "298",
+      "Ano 5": "263",
+      "Ano 6": ""
+    },
+    {
+      "Conta": "Imobilizado",
+      "Ano 1": "4492",
+      "Ano 2": "5019",
+      "Ano 3": "4553",
+      "Ano 4": "4039",
+      "Ano 5": "3712",
+      "Ano 6": ""
+    },
+    {
+      "Conta": "Intangível",
+      "Ano 1": "1653",
+      "Ano 2": "2143",
+      "Ano 3": "2704",
+      "Ano 4": "2755",
+      "Ano 5": "2674",
+      "Ano 6": ""
+    },
+    {
+      "Conta": "Propriedades para Investimentos",
+      "Ano 1": "",
+      "Ano 2": "",
+      "Ano 3": "",
+      "Ano 4": "",
+      "Ano 5": "",
+      "Ano 6": ""
+    },
+    {
+      "Conta": "Ativo Não Circulante",
+      "Ano 1": "",
+      "Ano 2": "",
+      "Ano 3": "",
+      "Ano 4": "",
+      "Ano 5": "",
+      "Ano 6": ""
+    },
+    {
+      "Conta": "Ativo Total",
+      "Ano 1": "",
+      "Ano 2": "",
+      "Ano 3": "",
+      "Ano 4": "",
+      "Ano 5": "",
+      "Ano 6": ""
+    },
+    {
+      "Conta": " ",
+      "Ano 1": "",
+      "Ano 2": "",
+      "Ano 3": "",
+      "Ano 4": "",
+      "Ano 5": "",
+      "Ano 6": ""
+    },
+    {
+      "Conta": "Empréstimos e Financiamentos (CP)",
+      "Ano 1": "6687",
+      "Ano 2": "5283",
+      "Ano 3": "6373",
+      "Ano 4": "6794",
+      "Ano 5": "5224",
+      "Ano 6": ""
+    },
+    {
+      "Conta": "Fornecedores",
+      "Ano 1": "8283",
+      "Ano 2": "9654",
+      "Ano 3": "10371",
+      "Ano 4": "8967",
+      "Ano 5": "10535",
+      "Ano 6": ""
+    },
+    {
+      "Conta": "Salários",
+      "Ano 1": "612",
+      "Ano 2": "591",
+      "Ano 3": "440",
+      "Ano 4": "448",
+      "Ano 5": "575",
+      "Ano 6": ""
+    },
+    {
+      "Conta": "Impostos e Encargos Sociais",
+      "Ano 1": "276",
+      "Ano 2": "231",
+      "Ano 3": "255",
+      "Ano 4": "517",
+      "Ano 5": "551",
+      "Ano 6": ""
+    },
+    {
+      "Conta": "Outros Passivos Circulantes",
+      "Ano 1": "2639",
+      "Ano 2": "2918",
+      "Ano 3": "2311",
+      "Ano 4": "2101",
+      "Ano 5": "2377",
+      "Ano 6": ""
+    },
+    {
+      "Conta": "Passivo Circulante",
+      "Ano 1": "",
+      "Ano 2": "",
+      "Ano 3": "",
+      "Ano 4": "",
+      "Ano 5": "",
+      "Ano 6": ""
+    },
+    {
+      "Conta": " ",
+      "Ano 1": "",
+      "Ano 2": "",
+      "Ano 3": "",
+      "Ano 4": "",
+      "Ano 5": "",
+      "Ano 6": ""
+    },
+    {
+      "Conta": "Empréstimos e Financiamentos (LP)",
+      "Ano 1": "2409",
+      "Ano 2": "4139",
+      "Ano 3": "3005",
+      "Ano 4": "2164",
+      "Ano 5": "4222",
+      "Ano 6": ""
+    },
+    {
+      "Conta": "Impostos (LP)",
+      "Ano 1": "23",
+      "Ano 2": "21",
+      "Ano 3": "54",
+      "Ano 4": "46",
+      "Ano 5": "48",
+      "Ano 6": ""
+    },
+    {
+      "Conta": "Outras Contas a Pagar",
+      "Ano 1": "6148",
+      "Ano 2": "6866",
+      "Ano 3": "7481",
+      "Ano 4": "7503",
+      "Ano 5": "7880",
+      "Ano 6": ""
+    },
+    {
+      "Conta": "Passivo Não Circulante",
+      "Ano 1": "",
+      "Ano 2": "",
+      "Ano 3": "",
+      "Ano 4": "",
+      "Ano 5": "",
+      "Ano 6": ""
+    },
+    {
+      "Conta": " ",
+      "Ano 1": "",
+      "Ano 2": "",
+      "Ano 3": "",
+      "Ano 4": "",
+      "Ano 5": "",
+      "Ano 6": ""
+    },
+    {
+      "Conta": "Capital Social",
+      "Ano 1": "",
+      "Ano 2": "",
+      "Ano 3": "",
+      "Ano 4": "",
+      "Ano 5": "",
+      "Ano 6": ""
+    },
+    {
+      "Conta": "Reserva de Lucros",
+      "Ano 1": "5979",
+      "Ano 2": "5637",
+      "Ano 3": "5284",
+      "Ano 4": "3454",
+      "Ano 5": "2477",
+      "Ano 6": ""
+    },
+    {
+      "Conta": "Resultados Acumulados",
+      "Ano 1": "",
+      "Ano 2": "",
+      "Ano 3": "",
+      "Ano 4": "",
+      "Ano 5": "",
+      "Ano 6": ""
+    },
+    {
+      "Conta": "Patrimônio Líquido",
+      "Ano 1": "",
+      "Ano 2": "",
+      "Ano 3": "",
+      "Ano 4": "",
+      "Ano 5": "",
+      "Ano 6": ""
+    },
+    {
+      "Conta": "Passivo Total",
+      "Ano 1": "",
+      "Ano 2": "",
+      "Ano 3": "",
+      "Ano 4": "",
+      "Ano 5": "",
+      "Ano 6": ""
+    },
+    {
+      "Conta": " ",
+      "Ano 1": "",
+      "Ano 2": "",
+      "Ano 3": "",
+      "Ano 4": "",
+      "Ano 5": "",
+      "Ano 6": ""
+    },
+    {
+      "Conta": "CHECK",
+      "Ano 1": "",
+      "Ano 2": "",
+      "Ano 3": "",
+      "Ano 4": "",
+      "Ano 5": "",
+      "Ano 6": ""
+    }
+  ],
+  "bp_override": [
+    {
+      "Conta": "Ativo Circulante",
+      "Ano 1": NaN,
+      "Ano 2": NaN,
+      "Ano 3": NaN,
+      "Ano 4": NaN,
+      "Ano 5": NaN,
+      "Ano 6": NaN
+    },
+    {
+      "Conta": "Ativo Não Circulante",
+      "Ano 1": NaN,
+      "Ano 2": NaN,
+      "Ano 3": NaN,
+      "Ano 4": NaN,
+      "Ano 5": NaN,
+      "Ano 6": NaN
+    },
+    {
+      "Conta": "Passivo Circulante",
+      "Ano 1": NaN,
+      "Ano 2": NaN,
+      "Ano 3": NaN,
+      "Ano 4": NaN,
+      "Ano 5": NaN,
+      "Ano 6": NaN
+    },
+    {
+      "Conta": "Passivo Não Circulante",
+      "Ano 1": NaN,
+      "Ano 2": NaN,
+      "Ano 3": NaN,
+      "Ano 4": NaN,
+      "Ano 5": NaN,
+      "Ano 6": NaN
+    },
+    {
+      "Conta": "Patrimônio Líquido",
+      "Ano 1": NaN,
+      "Ano 2": NaN,
+      "Ano 3": NaN,
+      "Ano 4": NaN,
+      "Ano 5": NaN,
+      "Ano 6": NaN
+    }
+  ]
+}

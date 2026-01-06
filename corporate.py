@@ -495,7 +495,7 @@ def consolidar_dre_com_override(dre_df: pd.DataFrame, override_df: pd.DataFrame)
     Consolida contas principais do DRE por ano e aplica override quando preenchido.
 
     Regras:
-    - Sempre NEGATIVOS (mesmo se usuário digitar +): CMV, Despesas, D&A, Imposto
+    - Sempre NEGATIVOS (mesmo se usuário digitar +): CMV, Despesas, D&A
     - Respeitam sinal digitado (+/-): Outras operacionais, Resultado Financeiro, Outros Não Operacionais
     - Compatível com símbolos na coluna Conta: "(+)", "(-)", "(=)", "(+/-)"
     """
@@ -532,7 +532,6 @@ def consolidar_dre_com_override(dre_df: pd.DataFrame, override_df: pd.DataFrame)
         "Despesas de Vendas",
         "Despesas gerais e administrativas",
         "Depreciação & Amortização",
-        "Imposto de Renda",
     ]
     for nome in sempre_negativas:
         m = mask_conta(nome)
@@ -557,7 +556,7 @@ def consolidar_dre_com_override(dre_df: pd.DataFrame, override_df: pd.DataFrame)
     outros_nonop = get("Outros Resultados Não Operacionais")  # LIVRE
     lair = ebit + fin + outros_nonop
 
-    imposto = get("Imposto de Renda")  # negativo
+    imposto = get("Imposto de Renda")  # pode ser positivo ou negativo
     lucro_liq = lair + imposto
 
     # EBITDA = EBIT + D&A (add-back). Como DA é negativo, subtrair DA soma.
@@ -608,10 +607,12 @@ def consolidar_bp_com_override(bp_df: pd.DataFrame, override_df: pd.DataFrame) -
 
     mapa = {
         "Ativo Circulante": [
-            "Caixa e Similares", "Contas a Receber", "Estoques", "Adiantamentos", "Outros ativos circulantes"
+            "Caixa e Similares", "Contas a Receber", "Estoques", "Adiantamentos", "Tributos a Recuperar (CP)",
+            "Outros ativos circulantes"
         ],
         "Ativo Não Circulante": [
-            "Investimentos em Outras Cias", "Imobilizado", "Intangível", "Propriedades para Investimentos"
+            "Realizável a Longo Prazo", "Tributos a Recuperar (LP)", "Investimentos em Outras Cias",
+            "Imobilizado", "Intangível", "Propriedades para Investimentos"
         ],
         "Passivo Circulante": [
             "Empréstimos e Financiamentos (CP)", "Fornecedores", "Salários",
@@ -767,7 +768,7 @@ with tab1:
             "(+/-) Resultado Financeiro",
             "(+/-) Outros Resultados Não Operacionais",
             "(=) Lucro Antes do IR",
-            "(-) Imposto de Renda",
+            "(+/-) Imposto de Renda",
             "(=) Lucro Líquido",
             "EBITDA",
         ]
@@ -845,9 +846,12 @@ with tab1:
             "Contas a Receber",
             "Estoques",
             "Adiantamentos",
+            "Tributos a Recuperar (CP)",
             "Outros ativos circulantes",
             "Ativo Circulante",
             " ",
+            "Realizável a Longo Prazo",
+            "Tributos a Recuperar (LP)",
             "Investimentos em Outras Cias",
             "Imobilizado",
             "Intangível",
@@ -987,10 +991,14 @@ with tab1:
         st.markdown("### Balanço Patrimonial — Estrutura (com consolidação automática)")
 
         df_bp_view = st.session_state.get("balanco_df", pd.DataFrame(columns=["Conta"] + anos))
+        df_bp_show = df_bp_view.copy()
+        mask_sep = df_bp_show["Conta"].astype(str).str.strip() == ""
+        for a in anos:
+            df_bp_show.loc[mask_sep, a] = np.nan
         st.dataframe(
-            formatar_apenas_valores(destacar_bp(df_bp_view)),
+            formatar_apenas_valores(destacar_bp(df_bp_show)),
             use_container_width=True,
-            height=altura_dataframe(df_bp_view)
+            height=altura_dataframe(df_bp_show)
         )
 
 
@@ -1219,7 +1227,7 @@ with tab2:
             ebit     = get_serie(dre_df, "Lucro Operacional - EBIT")
             ebitda   = get_serie(dre_df, "EBITDA")
             lucroliq = get_serie(dre_df, "Lucro Líquido")
-            imposto  = get_serie(dre_df, "Imposto de Renda").abs()          # módulo
+            imposto  = get_serie(dre_df, "Imposto de Renda")
             da       = get_serie(dre_df, "Depreciação & Amortização").abs() # módulo
 
             caixa = get_serie(bp_df, "Caixa e Similares")
