@@ -554,7 +554,7 @@ def consolidar_bp_com_override(bp_df: pd.DataFrame, override_df: pd.DataFrame) -
             "Partes Relacionadas Ativo (CP)", "Despesas Antecipadas", "Outros Ativos (CP)"
         ],
         "Ativo Não Circulante": [
-            "Contas a Receber (LP)", "Tributos a Recuperar (LP)", "Partes Relacionadas (LP)", "Judiciais",
+            "Contas a Receber (LP)", "Tributos a Recuperar (LP)", "Partes Relacionadas Ativo (LP)", "Judiciais",
             "Outros RLP", "Propriedades para Investimentos", "Ativos de Direito de Uso", "Investimentos",
             "Imobilizado", "Intangível"
         ],
@@ -564,6 +564,7 @@ def consolidar_bp_com_override(bp_df: pd.DataFrame, override_df: pd.DataFrame) -
         ],
         "Passivo Não Circulante": [
             "Empréstimos e Finan. (LP)", "Tributos (LP)", "Provisões (LP)", "Passivo de Arrendamento (LP)",
+            "Partes Relacionadas Passivo (LP)",
             "Outros Passivos (LP)"
         ],
         "Patrimônio Líquido": [
@@ -798,7 +799,7 @@ with tab1:
             " ",
             "Contas a Receber (LP)",
             "Tributos a Recuperar (LP)",
-            "Partes Relacionadas (LP)",
+            "Partes Relacionadas Ativo (LP)",
             "Judiciais",
             "Outros RLP",
             "Propriedades para Investimentos",
@@ -822,6 +823,7 @@ with tab1:
             "Tributos (LP)",
             "Provisões (LP)",
             "Passivo de Arrendamento (LP)",
+            "Partes Relacionadas Passivo (LP)",
             "Outros Passivos (LP)",
             "Passivo Não Circulante",
             " ",
@@ -1144,26 +1146,20 @@ with tab1:
                 # ---------
                 d_caixa = delta(bp_df, "Caixa e Similares", a_atual, a_ant)
 
-                # Ativo circulante/longa duração operacional (sem caixa) — aumento consome caixa
+                # Ativo circulante operacional (sem caixa) — aumento consome caixa
                 d_cr = delta(bp_df, "Contas a Receber (CP)", a_atual, a_ant)
                 d_est = delta(bp_df, "Estoques", a_atual, a_ant)
                 d_trib = delta(bp_df, "Tributos a Recuperar (CP)", a_atual, a_ant)
-                d_pr_cp = delta(bp_df, "Partes Relacionadas Ativo (CP)", a_atual, a_ant)
                 d_adi = delta(bp_df, "Despesas Antecipadas", a_atual, a_ant)
                 d_out_ac = delta(bp_df, "Outros Ativos (CP)", a_atual, a_ant)
-                d_cr_lp = delta(bp_df, "Contas a Receber (LP)", a_atual, a_ant)
-                d_trib_lp_ac = delta(bp_df, "Tributos a Recuperar (LP)", a_atual, a_ant)
-                d_pr_lp = delta(bp_df, "Partes Relacionadas (LP)", a_atual, a_ant)
-                d_jud = delta(bp_df, "Judiciais", a_atual, a_ant)
-                d_rlp = delta(bp_df, "Outros RLP", a_atual, a_ant)
 
                 # Passivo operacional (CP/LP) — aumento gera caixa
                 d_forn = delta(bp_df, "Fornecedores", a_atual, a_ant)
+                d_obr = delta(bp_df, "Obrigações Sociais e Trabalhistas", a_atual, a_ant)
                 d_imp_cp = delta(bp_df, "Impostos (CP)", a_atual, a_ant)
                 d_pr_pc = delta(bp_df, "Partes Relacionadas Passivo (CP)", a_atual, a_ant)
-                d_trib_lp_psv = delta(bp_df, "Tributos (LP)", a_atual, a_ant)
-                d_prov_lp = delta(bp_df, "Provisões (LP)", a_atual, a_ant)
-                d_out_lp = delta(bp_df, "Outros Passivos (LP)", a_atual, a_ant)
+                d_out_pc = delta(bp_df, "Outros Passivos (CP)", a_atual, a_ant)
+                d_out_pc = delta(bp_df, "Outros Passivos (CP)", a_atual, a_ant)
 
                 # Financiamento — aumentos geram caixa
                 d_div_cp = delta(bp_df, "Empréstimos (CP)", a_atual, a_ant)
@@ -1173,35 +1169,36 @@ with tab1:
                 d_cap = delta(bp_df, "Capital Social", a_atual, a_ant)
 
                 # Investimentos
+                d_prop = delta(bp_df, "Propriedades para Investimentos", a_atual, a_ant)
+                d_rou = delta(bp_df, "Ativos de Direito de Uso", a_atual, a_ant)
+                d_invest = delta(bp_df, "Investimentos", a_atual, a_ant)
                 d_imob = delta(bp_df, "Imobilizado", a_atual, a_ant)
                 d_intang = delta(bp_df, "Intangível", a_atual, a_ant)
-                d_prop = delta(bp_df, "Propriedades para Investimentos", a_atual, a_ant)
 
                 # -------------------------------------------------
                 # CFO (Indireto) - basico e robusto
                 # -------------------------------------------------
                 delta_wc = (
-                    d_cr + d_est + d_trib + d_pr_cp + d_adi + d_out_ac +
-                    d_cr_lp + d_trib_lp_ac + d_pr_lp + d_jud + d_rlp
+                    d_cr + d_est + d_trib + d_adi + d_out_ac
                 ) - (
-                    d_forn + d_imp_cp + d_pr_pc + d_trib_lp_psv + d_prov_lp + d_out_lp
+                    d_forn + d_obr + d_imp_cp + d_out_pc
                 )
                 # Aumento de WC consome caixa (subtrai)
-                ir_val = get_val(dre_df, "Imposto de Renda", a_atual)
-                ir_cf = float(ir_val) if float(ir_val) > 0 else 0.0
-                cfo = ll + da_addback - ir_cf - delta_wc
+                cfo = ll + da_addback - delta_wc
 
                 # -------------------------------------------------
                 # CFI (Investimentos) - proxy pela variacao do ANC
                 # Se ANC aumenta => consumo de caixa => negativo
                 # -------------------------------------------------
-                cfi = -(d_imob + d_intang + d_prop)
+                cfi = -(d_prop + d_invest + d_imob + d_intang + d_rou)
 
                 # -------------------------------------------------
                 # CFF (Finan.) - proxy por divida + PL
                 # Aumento divida/PL => entrada de caixa => positivo
                 # -------------------------------------------------
-                cff = d_div_cp + d_arr_cp + d_div_lp + d_arr_lp + d_cap
+                d_res = delta(bp_df, "Reserva de Lucros", a_atual, a_ant)
+                d_ret = delta(bp_df, "Resultados Acumulados", a_atual, a_ant)
+                cff = d_div_cp + d_arr_cp + d_div_lp + d_arr_lp + d_cap + d_res + d_ret
 
                 # Override manual (por ano corrente)
                 if isinstance(fc_override, pd.DataFrame):
@@ -1244,8 +1241,15 @@ with tab1:
                 .rename(columns={"index": "Conta"})
             )
 
+            def _style_fc_row(row):
+                if row["Conta"] in ["Fluxo de Caixa Operacional", "Fluxo de Caixa de Investimento", "Fluxo de Caixa de Financiamento"]:
+                    return ["background-color: #f2f2f2; font-weight: bold"] * len(row)
+                return [""] * len(row)
+
             st.dataframe(
-                df_fc_t.style.format({
+                df_fc_t.style
+                .apply(_style_fc_row, axis=1)
+                .format({
                     col: "R$ {:,.0f}" for col in df_fc_t.columns if col != "Conta"
                 }),
                 use_container_width=True,

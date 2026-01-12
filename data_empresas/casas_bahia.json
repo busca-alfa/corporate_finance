@@ -1,7 +1,7 @@
 {
   "empresa_id": "casas_bahia",
   "empresa_nome": "Casas Bahia",
-  "salvo_em": "2026-01-06 13:39:11",
+  "salvo_em": "2026-01-12 13:50:44",
   "dre_raw": [
     {
       "Conta": "(+) Receita Líquida",
@@ -378,11 +378,11 @@
     },
     {
       "Conta": "Obrigações Sociais e Trabalhistas",
-      "Ano 1": null,
-      "Ano 2": null,
-      "Ano 3": null,
-      "Ano 4": null,
-      "Ano 5": null,
+      "Ano 1": "612",
+      "Ano 2": "591",
+      "Ano 3": "440",
+      "Ano 4": "448",
+      "Ano 5": "575",
       "Ano 6": ""
     },
     {
@@ -405,20 +405,20 @@
     },
     {
       "Conta": "Impostos (CP)",
-      "Ano 1": "612",
-      "Ano 2": "591",
-      "Ano 3": "440",
-      "Ano 4": "448",
-      "Ano 5": "575",
-      "Ano 6": ""
-    },
-    {
-      "Conta": "Partes Relacionadas (CP)",
       "Ano 1": "276",
       "Ano 2": "231",
       "Ano 3": "255",
       "Ano 4": "517",
       "Ano 5": "551",
+      "Ano 6": ""
+    },
+    {
+      "Conta": "Partes Relacionadas (CP)",
+      "Ano 1": null,
+      "Ano 2": null,
+      "Ano 3": null,
+      "Ano 4": null,
+      "Ano 5": null,
       "Ano 6": ""
     },
     {
