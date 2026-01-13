@@ -2409,7 +2409,7 @@ with tab2:
             with c3:
                 beta = st.number_input("Beta da empresa", value=1.0, step=0.05)
             with c4:
-                tax = st.number_input("Alíquota de IR/CSLL %", value=34.0, step=1.0) / 100.0
+                tax = st.number_input("Alíquota de IR/CSLL %", value=34.0, step=0.5) / 100.0
                 st.session_state["tax_wacc"] = tax
 
             kd = st.number_input("Custo médio da dívida (Kd) % a.a.", value=12.0, step=0.25) / 100.0
@@ -3050,273 +3050,497 @@ with tab4:
     # SUBABA — FINANCIAMENTOS
     # =================================================
     with sub_fin:
-        st.markdown("## 🏦 Simulador de Financiamentos (12 meses)")
-        st.caption("Cadastre as captações e veja o cronograma mensal de juros/amortização e o serviço da dívida.")
 
-        meses = pd.Index([f"Mês {i}" for i in range(1, 13)], name="Mês")
+        def _npv(rate, cfs):
+            rate = float(rate)
+            return sum(cf / ((1 + rate) ** i) for i, cf in enumerate(cfs))
 
-        # -----------------------------
-        # Premissas de indexadores (curvas)
-        # -----------------------------
-        st.markdown("### 📌 Curvas de referência (simplificado)")
-        c1, c2, c3 = st.columns(3)
+        def irr_monthly(cfs, lo=-0.999, hi=5.0, tol=1e-8, max_iter=200):
+            """
+            IRR mensal robusta via bisseção.
+            Retorna np.nan se não houver mudança de sinal no NPV (sem raiz).
+            """
+            cfs = [float(x) for x in cfs]
+            f_lo = _npv(lo, cfs)
+            f_hi = _npv(hi, cfs)
+
+            # precisa ter mudança de sinal
+            if not np.isfinite(f_lo) or not np.isfinite(f_hi) or (f_lo == 0):
+                return lo
+            if f_hi == 0:
+                return hi
+            if f_lo * f_hi > 0:
+                return np.nan
+
+            for _ in range(max_iter):
+                mid = (lo + hi) / 2
+                f_mid = _npv(mid, cfs)
+                if not np.isfinite(f_mid):
+                    return np.nan
+                if abs(f_mid) < tol:
+                    return mid
+                if f_lo * f_mid < 0:
+                    hi, f_hi = mid, f_mid
+                else:
+                    lo, f_lo = mid, f_mid
+            return mid
+
+        def efetiva_mensal_de_aa(r_aa):
+            return (1 + float(r_aa)) ** (1/12) - 1
+
+        def bucket_ano(mes):
+            # Mes 1..12 = Ano 1; 13..24 = Ano 2 ...
+            return int((int(mes) - 1) // 12) + 1
+
+        def resumo_anual(df, tax_rate):
+            """
+            df precisa ter colunas: Mes, Juros, Tarifa (tarifa é custo real), Parcela
+            Retorna df anual com:
+            - JurosAno (despesa financeira)
+            - TaxShieldAno (economia de IR = juros * tax)
+            - CustoAno (juros + tarifas)
+            """
+            out = df.copy()
+            out["Ano"] = out["Mes"].apply(bucket_ano)
+            out["Juros"] = out["Juros"].astype(float)
+            out["Tarifa"] = out.get("Tarifa", 0.0).astype(float)
+
+            g = out.groupby("Ano", as_index=False).agg(
+                JurosAno=("Juros", "sum"),
+                TarifaAno=("Tarifa", "sum"),
+            )
+            g["TaxShieldAno"] = g["JurosAno"] * float(tax_rate)
+            g["CustoAno"] = g["JurosAno"] + g["TarifaAno"]
+            return g
+
+        
+
+        st.markdown("## 🏦 Comparador de Financiamentos — Operação A vs Operação B")
+        st.caption("Compare Pré vs CDI+Spread, SAC vs PRICE, e veja o ponto de cruzamento pelo custo total acumulado (juros pós-IR + tarifas).")
+
+        # ===== IR/CSLL (benefício fiscal do juro) =====
+        tax = st.session_state.get("tax_wacc", None)
+        if tax is None:
+            tax = 0.34  # fallback
+        tax = float(tax)
+
+        # =========================
+        # Cenário (CDI)
+        # =========================
+        c1, c2 = st.columns([1, 2])
         with c1:
-            cdi_aa = st.number_input("CDI (% a.a.)", value=13.0, step=0.25) / 100.0
+            cdi_aa = st.number_input("CDI cenário (% a.a.)", value=13.00, step=0.25) / 100.0
         with c2:
-            ipca_aa = st.number_input("IPCA (% a.a.) [opcional]", value=4.5, step=0.25) / 100.0
-        with c3:
-            usar_curva_constante = st.checkbox("Usar taxa constante (sem curva)", value=True)
-
-        # conversões mensais
-        cdi_am = (1 + cdi_aa) ** (1/12) - 1
-        ipca_am = (1 + ipca_aa) ** (1/12) - 1
+            st.info("Ajuste o CDI para simular cenário. O custo considera benefício fiscal (juros pós-IR).")
 
         st.divider()
 
-        # -----------------------------
-        # Editor de operações
-        # -----------------------------
-        st.markdown("### 🧾 Operações (cadastro)")
-
-        if "fin_ops" not in st.session_state:
-            st.session_state["fin_ops"] = pd.DataFrame([
-                {
-                    "Operação": "Captação 1",
-                    "Principal (R$)": 1_000_000.0,
-                    "Indexador": "Pós (CDI)",
-                    "Taxa/Spread (% a.a.)": 3.0,   # se Pré: taxa nominal; se Pós: spread
-                    "Prazo (meses)": 24,
-                    "Carência (meses)": 0,
-                    "Sistema": "PRICE",           # PRICE ou SAC
-                    "Início (mês)": 1             # mês 1..12 (quando entra o recurso)
-                }
-            ])
-
-        df_ops = st.data_editor(
-            st.session_state["fin_ops"],
-            num_rows="dynamic",
-            use_container_width=True,
-            key="fin_ops_editor"
-        )
-        st.session_state["fin_ops"] = df_ops.copy()
-
-        # validação mínima
-        if df_ops.empty:
-            st.info("Cadastre pelo menos 1 operação para simular.")
-            st.stop()
-
-        # -----------------------------
-        # Funções de cálculo
-        # -----------------------------
-        def taxa_mensal(indexador: str, taxa_spread_aa: float) -> float:
-            """
-            Retorna taxa mensal efetiva.
-            - Pré: usa taxa_spread_aa como taxa nominal anual
-            - Pós (CDI): taxa_spread_aa é spread anual somado ao CDI
-            """
-            idx = (indexador or "").strip().lower()
-            if "pré" in idx or "pre" in idx:
-                r_aa = taxa_spread_aa
-            elif "cdi" in idx:
-                r_aa = cdi_aa + taxa_spread_aa
-            elif "ipca" in idx:
-                r_aa = ipca_aa + taxa_spread_aa
+        # =========================
+        # Funções financeiras
+        # =========================
+        def taxa_mensal(tipo, taxa_aa, cdi_aa_local):
+            """tipo: 'Pré' ou 'Pós (CDI)'. taxa_aa: se Pré = taxa; se Pós = spread."""
+            if tipo == "Pré":
+                r_aa = float(taxa_aa)
             else:
-                # fallback: trata como pré
-                r_aa = taxa_spread_aa
-
+                r_aa = float(cdi_aa_local) + float(taxa_aa)  # CDI + spread
             return (1 + r_aa) ** (1/12) - 1
 
         def cronograma_price(principal, r_m, n, carencia=0):
-            """
-            PRICE com carência de pagamento (juros capitalizados durante carência).
-            Retorna DataFrame com saldo, juros, amort, parcela.
-            """
-            # capitaliza durante carência
-            saldo0 = principal * ((1 + r_m) ** carencia)
-            n_pag = max(n - carencia, 0)
-
-            if n_pag <= 0:
-                # nada a pagar no horizonte
-                return pd.DataFrame()
-
-            # parcela fixa
-            pmt = saldo0 * (r_m * (1 + r_m) ** n_pag) / ((1 + r_m) ** n_pag - 1) if r_m != 0 else saldo0 / n_pag
-
-            saldo = saldo0
+            saldo = float(principal)
             rows = []
-            for t in range(1, n + 1):
-                if t <= carencia:
-                    # sem pagamento; juros capitalizam
-                    juros = saldo * r_m
-                    amort = 0.0
-                    parcela = 0.0
-                    saldo = saldo + juros
-                else:
-                    juros = saldo * r_m
-                    amort = pmt - juros
-                    saldo = max(saldo - amort, 0.0)
-                    parcela = pmt
 
-                rows.append({"t": t, "Saldo": saldo, "Juros": juros, "Amortização": amort, "Parcela": parcela})
+            # carência: capitaliza juros
+            for t in range(1, carencia + 1):
+                juros = saldo * r_m
+                saldo += juros
+                rows.append({"Mes": t, "Saldo": saldo, "Juros": juros, "Amort": 0.0, "Parcela": 0.0})
+
+            n_pag = max(int(n) - int(carencia), 0)
+            if n_pag <= 0:
+                return pd.DataFrame(rows)
+
+            if r_m == 0:
+                pmt = saldo / n_pag
+            else:
+                pmt = saldo * (r_m * (1 + r_m) ** n_pag) / ((1 + r_m) ** n_pag - 1)
+
+            for k in range(1, n_pag + 1):
+                t = int(carencia) + k
+                juros = saldo * r_m
+                amort = pmt - juros
+                saldo = max(saldo - amort, 0.0)
+                rows.append({"Mes": t, "Saldo": saldo, "Juros": juros, "Amort": amort, "Parcela": pmt})
 
             return pd.DataFrame(rows)
 
         def cronograma_sac(principal, r_m, n, carencia=0):
-            """
-            SAC com carência (juros capitalizados durante carência, amortização constante após carência).
-            """
-            saldo0 = principal * ((1 + r_m) ** carencia)
-            n_pag = max(n - carencia, 0)
-            if n_pag <= 0:
-                return pd.DataFrame()
-
-            amort_const = saldo0 / n_pag
-
-            saldo = saldo0
+            saldo = float(principal)
             rows = []
-            for t in range(1, n + 1):
-                if t <= carencia:
-                    juros = saldo * r_m
-                    amort = 0.0
-                    parcela = 0.0
-                    saldo = saldo + juros
-                else:
-                    juros = saldo * r_m
-                    amort = amort_const
-                    parcela = juros + amort
-                    saldo = max(saldo - amort, 0.0)
 
-                rows.append({"t": t, "Saldo": saldo, "Juros": juros, "Amortização": amort, "Parcela": parcela})
+            for t in range(1, int(carencia) + 1):
+                juros = saldo * r_m
+                saldo += juros
+                rows.append({"Mes": t, "Saldo": saldo, "Juros": juros, "Amort": 0.0, "Parcela": 0.0})
+
+            n_pag = max(int(n) - int(carencia), 0)
+            if n_pag <= 0:
+                return pd.DataFrame(rows)
+
+            amort_const = saldo / n_pag
+
+            for k in range(1, n_pag + 1):
+                t = int(carencia) + k
+                juros = saldo * r_m
+                amort = amort_const
+                parcela = juros + amort
+                saldo = max(saldo - amort, 0.0)
+                rows.append({"Mes": t, "Saldo": saldo, "Juros": juros, "Amort": amort, "Parcela": parcela})
 
             return pd.DataFrame(rows)
 
-        # -----------------------------
-        # Simulação agregada (12 meses)
-        # -----------------------------
-        st.markdown("### 📊 Resultado — 12 meses (agregado)")
+        def efetiva_aa(tipo, taxa_aa, cdi_aa_local):
+            """Taxa nominal total a.a. (Pré ou CDI+spread)."""
+            if tipo == "Pré":
+                return float(taxa_aa)
+            return float(cdi_aa_local) + float(taxa_aa)
 
-        # agregadores
-        agg = pd.DataFrame(index=meses, data={
-            "Entrada de Caixa": 0.0,
-            "Juros": 0.0,
-            "Amortização": 0.0,
-            "Serviço da Dívida": 0.0,   # juros + amort
-            "Saldo Final": 0.0
-        })
+        def simular_op(principal, tipo, taxa_aa, prazo_m, carencia_m, sistema, cdi_aa_local, tarifa_0=0.0, tax_rate=0.34):
+            """
+            Retorna cronograma completo até prazo_m, com:
+            - Juros pós-IR = Juros * (1 - tax_rate)
+            - CustoMes = Juros pós-IR + tarifa (mês 1)
+            """
+            principal = float(principal)
+            prazo_m = int(prazo_m)
+            carencia_m = int(carencia_m)
+            tarifa_0 = float(tarifa_0)
+            tax_rate = float(tax_rate)
 
-        detalhes = []
+            r_m = taxa_mensal(tipo, float(taxa_aa), float(cdi_aa_local))
 
-        for _, op in df_ops.iterrows():
-            nome = str(op.get("Operação", "Operação"))
-            principal = float(op.get("Principal (R$)", 0.0) or 0.0)
-            indexador = str(op.get("Indexador", "Pós (CDI)"))
-            taxa_spread = float(op.get("Taxa/Spread (% a.a.)", 0.0) or 0.0) / 100.0
-            prazo = int(op.get("Prazo (meses)", 0) or 0)
-            carencia = int(op.get("Carência (meses)", 0) or 0)
-            sistema = str(op.get("Sistema", "PRICE")).strip().upper()
-            inicio = int(op.get("Início (mês)", 1) or 1)
-
-            if principal <= 0 or prazo <= 0:
-                continue
-
-            r_m = taxa_mensal(indexador, taxa_spread)
-
-            if sistema == "SAC":
-                cron = cronograma_sac(principal, r_m, prazo, carencia=carencia)
+            if sistema == "PRICE":
+                cron = cronograma_price(principal, r_m, prazo_m, carencia=carencia_m)
             else:
-                cron = cronograma_price(principal, r_m, prazo, carencia=carencia)
+                cron = cronograma_sac(principal, r_m, prazo_m, carencia=carencia_m)
 
             if cron.empty:
-                continue
+                cron = pd.DataFrame({"Mes": np.arange(1, prazo_m + 1), "Saldo": 0.0, "Juros": 0.0, "Amort": 0.0, "Parcela": 0.0})
 
-            # alinhar cronograma no eixo "Mês 1..12"
-            # entrada de caixa ocorre no mês "inicio"
-            for m_i in range(1, 13):
-                mes_label = f"Mês {m_i}"
+            cron = cron.sort_values("Mes").reset_index(drop=True)
 
-                # entrada no início
-                if m_i == inicio:
-                    agg.loc[mes_label, "Entrada de Caixa"] += principal
+            # tarifas
+            cron["Tarifa"] = 0.0
+            cron.loc[cron["Mes"] == 1, "Tarifa"] = tarifa_0
 
-                # parcela começa no mês "inicio" + (t-1)
-                t = m_i - inicio + 1
-                if t >= 1 and t <= len(cron):
-                    juros = float(cron.loc[cron["t"] == t, "Juros"].iloc[0])
-                    amort = float(cron.loc[cron["t"] == t, "Amortização"].iloc[0])
-                    saldo = float(cron.loc[cron["t"] == t, "Saldo"].iloc[0])
+            # benefício fiscal: incide sobre JUROS
+            cron["Juros_posIR"] = cron["Juros"] * (1.0 - tax_rate)
 
-                    agg.loc[mes_label, "Juros"] += juros
-                    agg.loc[mes_label, "Amortização"] += amort
-                    agg.loc[mes_label, "Saldo Final"] += saldo
+            cron["CustoMes"] = cron["Juros_posIR"] + cron["Tarifa"]
+            cron["CustoAcum"] = cron["CustoMes"].cumsum()
+            cron["ParcelaAcum"] = cron["Parcela"].cumsum()
 
-            cron["Operação"] = nome
-            cron["Indexador"] = indexador
-            cron["Sistema"] = sistema
-            cron["Taxa_mensal"] = r_m
-            cron["Início_mês"] = inicio
-            detalhes.append(cron)
+            return cron, r_m
 
-        agg["Serviço da Dívida"] = agg["Juros"] + agg["Amortização"]
+        def achar_cruzamento(dfA, dfB):
+            # iguala pelo custo acumulado, no horizonte comum
+            n = min(len(dfA), len(dfB))
+            a = dfA.iloc[:n].copy()
+            b = dfB.iloc[:n].copy()
+            diff = a["CustoAcum"].values - b["CustoAcum"].values
 
-        st.dataframe(
-            agg.reset_index().style.format({
-                "Entrada de Caixa": "R$ {:,.0f}",
-                "Juros": "R$ {:,.0f}",
-                "Amortização": "R$ {:,.0f}",
-                "Serviço da Dívida": "R$ {:,.0f}",
-                "Saldo Final": "R$ {:,.0f}",
-            }),
-            use_container_width=True,
-            height=520
+            for i in range(1, len(diff)):
+                if np.sign(diff[i-1]) != np.sign(diff[i]) and diff[i-1] != 0:
+                    return int(a.loc[i, "Mes"])
+            if np.any(diff == 0):
+                return int(a.loc[np.where(diff == 0)[0][0], "Mes"])
+            return None
+
+        def fmt_pct(x):
+            return f"{x*100:.2f}%"
+
+        def fmt_rs(x):
+            return f"R$ {x:,.0f}"
+
+        # =========================
+        # Layout lado a lado (inputs)
+        # =========================
+        colA, colB = st.columns(2)
+
+        with colA:
+            st.markdown("### Operação A")
+            principal_A = st.number_input("Principal (R$)", value=1_000_000.0, step=50_000.0, key="finA_principal")
+            tipo_A = st.selectbox("Tipo", options=["Pré", "Pós (CDI)"], index=0, key="finA_tipo")
+
+            if tipo_A == "Pré":
+                taxa_A = st.number_input("Taxa (% a.a.)", value=15.0, step=0.25, key="finA_taxa") / 100.0
+            else:
+                taxa_A = st.number_input("Spread (% a.a.)", value=3.0, step=0.25, key="finA_spread") / 100.0
+
+            sistema_A = st.selectbox("Sistema de amortização", options=["SAC", "PRICE"], index=0, key="finA_sist")
+            prazo_A = st.slider("Prazo (meses)", min_value=1, max_value=240, value=24, step=1, key="finA_prazo")
+            carencia_A = st.slider("Carência (meses)", min_value=0, max_value=min(60, prazo_A), value=0, step=1, key="finA_car")
+            tarifa_A = st.number_input("Tarifa inicial (R$) [opcional]", value=0.0, step=5_000.0, key="finA_tarifa")
+
+        with colB:
+            st.markdown("### Operação B")
+            principal_B = st.number_input("Principal (R$)", value=1_000_000.0, step=50_000.0, key="finB_principal")
+            tipo_B = st.selectbox("Tipo", options=["Pré", "Pós (CDI)"], index=1, key="finB_tipo")
+
+            if tipo_B == "Pré":
+                taxa_B = st.number_input("Taxa (% a.a.)", value=15.0, step=0.25, key="finB_taxa") / 100.0
+            else:
+                taxa_B = st.number_input("Spread (% a.a.)", value=3.0, step=0.25, key="finB_spread") / 100.0
+
+            sistema_B = st.selectbox("Sistema de amortização", options=["SAC", "PRICE"], index=1, key="finB_sist")
+            prazo_B = st.slider("Prazo (meses)", min_value=1, max_value=240, value=24, step=1, key="finB_prazo")
+            carencia_B = st.slider("Carência (meses)", min_value=0, max_value=min(60, prazo_B), value=0, step=1, key="finB_car")
+            tarifa_B = st.number_input("Tarifa inicial (R$) [opcional]", value=0.0, step=5_000.0, key="finB_tarifa")
+
+        # =========================
+        # Simulação (horizonte = prazo final)
+        # =========================
+        dfA, rA = simular_op(principal_A, tipo_A, taxa_A, prazo_A, carencia_A, sistema_A, cdi_aa, tarifa_0=tarifa_A, tax_rate=tax)
+        dfB, rB = simular_op(principal_B, tipo_B, taxa_B, prazo_B, carencia_B, sistema_B, cdi_aa, tarifa_0=tarifa_B, tax_rate=tax)
+
+        max_prazo = int(max(prazo_A, prazo_B))
+        meses = np.arange(1, max_prazo + 1)
+        labels = [f"Mês {i}" for i in meses]
+
+        # garante grade completa até max_prazo (para plot e tabela alinhados)
+        def pad(df, max_m):
+            base = pd.DataFrame({"Mes": np.arange(1, max_m + 1)})
+            out = base.merge(df, on="Mes", how="left").fillna(0.0)
+            return out
+
+        dfA = pad(dfA, max_prazo)
+        dfB = pad(dfB, max_prazo)
+
+
+        # =========================================================
+        # =========================================================
+        # Gráfico: Parcela — Operação A vs Operação B (somente o simulado)
+        # =========================================================
+        st.markdown("### Parcela — Operação A vs Operação B")
+
+        def achar_cruzamento_series(yA, yB, meses):
+            yA = np.array(yA, dtype=float)
+            yB = np.array(yB, dtype=float)
+            diff = yA - yB
+
+            for i in range(1, len(diff)):
+                if np.sign(diff[i-1]) != np.sign(diff[i]) and diff[i-1] != 0:
+                    return int(meses[i])
+            if np.any(diff == 0):
+                return int(meses[int(np.where(diff == 0)[0][0])])
+            return None
+
+        # séries (somente o que foi escolhido e simulado)
+        meses = dfA["Mes"].astype(int).values
+        parcA = dfA["Parcela"].astype(float).values
+        parcB = dfB["Parcela"].astype(float).values
+
+        cruz_parcela = achar_cruzamento_series(parcA, parcB, meses)
+
+        fig_p = go.Figure()
+        fig_p.add_trace(go.Scatter(x=meses, y=parcA, mode="lines", name="Parcela A"))
+        fig_p.add_trace(go.Scatter(x=meses, y=parcB, mode="lines", name="Parcela B"))
+
+        # marca cruzamento A vs B (se existir)
+        if cruz_parcela is not None and 1 <= cruz_parcela <= int(max_prazo):
+            fig_p.add_vline(x=cruz_parcela, line_width=2, line_dash="dot")
+
+        fig_p.update_layout(
+            height=380,
+            xaxis_title="Mês",
+            yaxis_title="R$",
+            legend_title="Séries"
         )
 
-        # salva para integrar na simulação de caixa depois
-        st.session_state["sim_fin_12m"] = agg.copy()
+        st.plotly_chart(fig_p, use_container_width=True)
 
+        if cruz_parcela is not None:
+            st.info(f"As parcelas (A vs B) se cruzam por volta do **Mês {cruz_parcela}**.")
+        else:
+            st.caption("As parcelas (A vs B) não se cruzam no horizonte comparado.")
+
+
+        
+        # -------- fluxos p/ CET (inclui tarifa no mês 0 via recebimento líquido) --------
+        def montar_fluxos_cet(principal, tarifa_0, df, tax_rate):
+            principal = float(principal)
+            tarifa_0 = float(tarifa_0)
+            tax_rate = float(tax_rate)
+
+            # mês 0: tomador recebe principal líquido de tarifa (se tarifa for custo upfront)
+            cf0 = principal - tarifa_0
+
+            # meses 1..N: paga parcela
+            parcelas = df["Parcela"].astype(float).values.tolist()
+            juros = df["Juros"].astype(float).values.tolist()
+
+            # CET "nominal": saídas = parcela (o que sai do caixa)
+            cfs_nom = [cf0] + [-p for p in parcelas]
+
+            # CET pós-IR: benefício fiscal sobre JUROS (tax shield)
+            # Saída líquida = parcela - juros*tax
+            cfs_after = [cf0] + [-(p - j*tax_rate) for p, j in zip(parcelas, juros)]
+
+            return cfs_nom, cfs_after
+
+        cfsA, cfsA_after = montar_fluxos_cet(principal_A, tarifa_A, dfA, tax)
+        cfsB, cfsB_after = montar_fluxos_cet(principal_B, tarifa_B, dfB, tax)
+
+        cetA_m = irr_monthly(cfsA)
+        cetB_m = irr_monthly(cfsB)
+        cetA_after_m = irr_monthly(cfsA_after)
+        cetB_after_m = irr_monthly(cfsB_after)
+
+        # taxa nominal mensal (apenas para referência de indexador)
+        effA_aa = efetiva_aa(tipo_A, taxa_A, cdi_aa)  # sua função já existente
+        effB_aa = efetiva_aa(tipo_B, taxa_B, cdi_aa)
+        taxaA_m = efetiva_mensal_de_aa(effA_aa)
+        taxaB_m = efetiva_mensal_de_aa(effB_aa)
+
+        def fmt_pct_m(x):
+            return "n/a" if (x is None or not np.isfinite(x)) else f"{x*100:.3f}% a.m."
+
+        def fmt_pct_m_delta(x):
+            return "n/a" if (x is None or not np.isfinite(x)) else f"{x*100:.3f}% a.m."
+
+        # ---------------- Cards (sem repetir taxa a.a.) ----------------
         st.divider()
+        k1, k2, k3, k4 = st.columns(4)
 
-        # -----------------------------
-        # Gráficos
-        # -----------------------------
-        st.markdown("### 📈 Gráficos")
+        with k1:
+            st.metric(
+                "Operação A — taxa mensal",
+                fmt_pct_m(taxaA_m),
+                delta=f"CET: {fmt_pct_m_delta(cetA_m)}"
+            )
 
-        fig_saldo = go.Figure()
-        fig_saldo.add_trace(go.Scatter(
-            x=agg.index.tolist(),
-            y=agg["Saldo Final"].tolist(),
-            mode="lines+markers",
-            name="Saldo Final (somado)"
+        with k2:
+            st.metric(
+                "Operação B — taxa mensal",
+                fmt_pct_m(taxaB_m),
+                delta=f"CET: {fmt_pct_m_delta(cetB_m)}"
+            )
+
+        with k3:
+            st.metric(
+                "Operação A — CET pós-benefício fiscal",
+                fmt_pct_m(cetA_after_m),
+                delta=f"Alíquota: {tax*100:.0f}% (tax shield nos juros)"
+            )
+
+        with k4:
+            st.metric(
+                "Operação B — CET pós-benefício fiscal",
+                fmt_pct_m(cetB_after_m),
+                delta=f"Alíquota: {tax*100:.0f}% (tax shield nos juros)"
+            )
+
+        # ---------------- Custo acumulado REAL (juros + tarifas) ----------------
+        dfA["CustoMes"] = dfA["Juros"].astype(float) + dfA.get("Tarifa", 0.0).astype(float)
+        dfB["CustoMes"] = dfB["Juros"].astype(float) + dfB.get("Tarifa", 0.0).astype(float)
+        dfA["CustoAcum"] = dfA["CustoMes"].cumsum()
+        dfB["CustoAcum"] = dfB["CustoMes"].cumsum()
+
+        # (se você já tem achar_cruzamento, mantenha)
+        cruz = achar_cruzamento(dfA, dfB)
+
+        if cruz is not None:
+            st.info(f"O custo acumulado (juros + tarifas) se cruza por volta do **Mês {cruz}**.")
+        else:
+            st.info("Não houve cruzamento do custo acumulado (juros + tarifas) no horizonte comparado.")
+
+        # ---------------- Gráfico: Custo total acumulado ----------------
+        labels = [f"Mês {i}" for i in range(1, max_prazo + 1)]
+        st.markdown("### Custo total acumulado (juros + tarifas) — A vs B")
+        fig_c = go.Figure()
+        fig_c.add_trace(go.Scatter(x=labels, y=dfA["CustoAcum"], mode="lines+markers", name="Custo Acum A"))
+        fig_c.add_trace(go.Scatter(x=labels, y=dfB["CustoAcum"], mode="lines+markers", name="Custo Acum B"))
+        if cruz is not None and 1 <= cruz <= max_prazo:
+            fig_c.add_vline(x=f"Mês {cruz}", line_width=2)
+        fig_c.update_layout(height=380, xaxis_title="Mês", yaxis_title="R$")
+        st.plotly_chart(fig_c, use_container_width=True)
+
+        # ---------------- Gráfico anual — A e B em painéis lado a lado (barras sobrepostas) ----------------
+        st.markdown("### Despesa financeira por ano e economia de IR (benefício fiscal)")
+
+        anA = resumo_anual(dfA, tax)
+        anB = resumo_anual(dfB, tax)
+
+        anos_max = int(max(
+            anA["Ano"].max() if not anA.empty else 1,
+            anB["Ano"].max() if not anB.empty else 1
         ))
-        fig_saldo.update_layout(height=360, xaxis_title="Mês", yaxis_title="R$")
-        st.plotly_chart(fig_saldo, use_container_width=True)
+        anos_axis = [f"Ano {i}" for i in range(1, anos_max + 1)]
 
-        fig_serv = go.Figure()
-        fig_serv.add_trace(go.Bar(x=agg.index.tolist(), y=agg["Juros"].tolist(), name="Juros"))
-        fig_serv.add_trace(go.Bar(x=agg.index.tolist(), y=agg["Amortização"].tolist(), name="Amortização"))
-        fig_serv.update_layout(barmode="stack", height=360, xaxis_title="Mês", yaxis_title="R$")
-        st.plotly_chart(fig_serv, use_container_width=True)
+        def serie_por_ano(df_anual, col, anos_max):
+            m = {int(r["Ano"]): float(r[col]) for _, r in df_anual.iterrows()}
+            return [m.get(i, 0.0) for i in range(1, anos_max + 1)]
 
-        # Detalhe por operação (opcional)
-        with st.expander("🔎 Ver cronograma detalhado por operação"):
-            if detalhes:
-                df_det = pd.concat(detalhes, ignore_index=True)
-                st.dataframe(
-                    df_det.style.format({
-                        "Saldo": "R$ {:,.0f}",
-                        "Juros": "R$ {:,.0f}",
-                        "Amortização": "R$ {:,.0f}",
-                        "Parcela": "R$ {:,.0f}",
-                        "Taxa_mensal": "{:.4%}",
-                    }),
-                    use_container_width=True,
-                    height=520
-                )
-            else:
-                st.info("Nenhuma operação válida cadastrada.")
-    
-    # =================================================
-    # SUBABA — CAIXA (rascunho do que já existe)
-    # =================================================
-    with sub_caixa:
-        st.info("Mantive a aba de caixa como rascunho. Vamos ajustá-la depois integrando o serviço da dívida calculado aqui.")
+        jurosA_y  = serie_por_ano(anA, "JurosAno", anos_max)
+        shieldA_y = serie_por_ano(anA, "TaxShieldAno", anos_max)
+
+        jurosB_y  = serie_por_ano(anB, "JurosAno", anos_max)
+        shieldB_y = serie_por_ano(anB, "TaxShieldAno", anos_max)
+
+        gA, gB = st.columns(2)
+
+        with gA:
+            st.markdown("#### Operação A")
+            figA = go.Figure()
+            figA.add_trace(go.Bar(x=anos_axis, y=jurosA_y,  name="Despesa financeira (juros)"))
+            figA.add_trace(go.Bar(x=anos_axis, y=shieldA_y, name="Economia IR (tax shield)"))
+            figA.update_layout(
+                height=380,
+                barmode="overlay",
+                xaxis_title="Ano",
+                yaxis_title="R$",
+                legend_title="Componentes"
+            )
+            st.plotly_chart(figA, use_container_width=True)
+
+        with gB:
+            st.markdown("#### Operação B")
+            figB = go.Figure()
+            figB.add_trace(go.Bar(x=anos_axis, y=jurosB_y,  name="Despesa financeira (juros)"))
+            figB.add_trace(go.Bar(x=anos_axis, y=shieldB_y, name="Economia IR (tax shield)"))
+            figB.update_layout(
+                height=380,
+                barmode="overlay",
+                xaxis_title="Ano",
+                yaxis_title="R$",
+                legend_title="Componentes"
+            )
+            st.plotly_chart(figB, use_container_width=True)
+
+
+        # ---------------- Tabela detalhada (remove Juros pós-IR) ----------------
+        st.markdown("### Detalhe por mês — A | B")
+
+        # Total Pago = acumulado do que saiu do caixa (parcela)
+        dfA["TotalPago"] = dfA["Parcela"].astype(float).cumsum()
+        dfB["TotalPago"] = dfB["Parcela"].astype(float).cumsum()
+
+        colsA = ["Mes", "Parcela", "Juros", "Amort", "Saldo", "CustoMes", "CustoAcum", "TotalPago"]
+        colsB = ["Mes", "Parcela", "Juros", "Amort", "Saldo", "CustoMes", "CustoAcum", "TotalPago"]
+
+        tA = dfA[colsA].copy().rename(columns={
+            "Parcela":"Parcela A","Juros":"Juros A","Amort":"Amort A","Saldo":"Saldo A",
+            "CustoMes":"Custo mês A","CustoAcum":"Custo acum A","TotalPago":"Total Pago A"
+        })
+        tB = dfB[colsB].copy().rename(columns={
+            "Parcela":"Parcela B","Juros":"Juros B","Amort":"Amort B","Saldo":"Saldo B",
+            "CustoMes":"Custo mês B","CustoAcum":"Custo acum B","TotalPago":"Total Pago B"
+        })
+
+        spacer = pd.DataFrame({"   ": [""] * len(tA)})  # espaço visual
+        t = pd.concat([tA, spacer, tB.drop(columns=["Mes"])], axis=1)
+
+        fmt_cols = {c: "R$ {:,.0f}" for c in t.columns if c not in ["Mes", "   "]}
+        st.dataframe(t.style.format(fmt_cols), use_container_width=True, height=560)
+
+        
