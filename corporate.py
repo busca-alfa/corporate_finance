@@ -3032,3 +3032,291 @@ with tab3:
         st.dataframe(df_params, use_container_width=True, hide_index=True)
 
 
+import numpy as np
+import pandas as pd
+import plotly.graph_objects as go
+import streamlit as st
+
+# =================================================
+# TAB 4 — SIMULAÇÕES
+# =================================================
+with tab4:
+    st.subheader("🧪 Simulações")
+
+    # Subabas da simulação
+    sub_fin, sub_caixa = st.tabs(["🏦 Financiamentos", "💧 Caixa (rascunho)"])
+
+    # =================================================
+    # SUBABA — FINANCIAMENTOS
+    # =================================================
+    with sub_fin:
+        st.markdown("## 🏦 Simulador de Financiamentos (12 meses)")
+        st.caption("Cadastre as captações e veja o cronograma mensal de juros/amortização e o serviço da dívida.")
+
+        meses = pd.Index([f"Mês {i}" for i in range(1, 13)], name="Mês")
+
+        # -----------------------------
+        # Premissas de indexadores (curvas)
+        # -----------------------------
+        st.markdown("### 📌 Curvas de referência (simplificado)")
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            cdi_aa = st.number_input("CDI (% a.a.)", value=13.0, step=0.25) / 100.0
+        with c2:
+            ipca_aa = st.number_input("IPCA (% a.a.) [opcional]", value=4.5, step=0.25) / 100.0
+        with c3:
+            usar_curva_constante = st.checkbox("Usar taxa constante (sem curva)", value=True)
+
+        # conversões mensais
+        cdi_am = (1 + cdi_aa) ** (1/12) - 1
+        ipca_am = (1 + ipca_aa) ** (1/12) - 1
+
+        st.divider()
+
+        # -----------------------------
+        # Editor de operações
+        # -----------------------------
+        st.markdown("### 🧾 Operações (cadastro)")
+
+        if "fin_ops" not in st.session_state:
+            st.session_state["fin_ops"] = pd.DataFrame([
+                {
+                    "Operação": "Captação 1",
+                    "Principal (R$)": 1_000_000.0,
+                    "Indexador": "Pós (CDI)",
+                    "Taxa/Spread (% a.a.)": 3.0,   # se Pré: taxa nominal; se Pós: spread
+                    "Prazo (meses)": 24,
+                    "Carência (meses)": 0,
+                    "Sistema": "PRICE",           # PRICE ou SAC
+                    "Início (mês)": 1             # mês 1..12 (quando entra o recurso)
+                }
+            ])
+
+        df_ops = st.data_editor(
+            st.session_state["fin_ops"],
+            num_rows="dynamic",
+            use_container_width=True,
+            key="fin_ops_editor"
+        )
+        st.session_state["fin_ops"] = df_ops.copy()
+
+        # validação mínima
+        if df_ops.empty:
+            st.info("Cadastre pelo menos 1 operação para simular.")
+            st.stop()
+
+        # -----------------------------
+        # Funções de cálculo
+        # -----------------------------
+        def taxa_mensal(indexador: str, taxa_spread_aa: float) -> float:
+            """
+            Retorna taxa mensal efetiva.
+            - Pré: usa taxa_spread_aa como taxa nominal anual
+            - Pós (CDI): taxa_spread_aa é spread anual somado ao CDI
+            """
+            idx = (indexador or "").strip().lower()
+            if "pré" in idx or "pre" in idx:
+                r_aa = taxa_spread_aa
+            elif "cdi" in idx:
+                r_aa = cdi_aa + taxa_spread_aa
+            elif "ipca" in idx:
+                r_aa = ipca_aa + taxa_spread_aa
+            else:
+                # fallback: trata como pré
+                r_aa = taxa_spread_aa
+
+            return (1 + r_aa) ** (1/12) - 1
+
+        def cronograma_price(principal, r_m, n, carencia=0):
+            """
+            PRICE com carência de pagamento (juros capitalizados durante carência).
+            Retorna DataFrame com saldo, juros, amort, parcela.
+            """
+            # capitaliza durante carência
+            saldo0 = principal * ((1 + r_m) ** carencia)
+            n_pag = max(n - carencia, 0)
+
+            if n_pag <= 0:
+                # nada a pagar no horizonte
+                return pd.DataFrame()
+
+            # parcela fixa
+            pmt = saldo0 * (r_m * (1 + r_m) ** n_pag) / ((1 + r_m) ** n_pag - 1) if r_m != 0 else saldo0 / n_pag
+
+            saldo = saldo0
+            rows = []
+            for t in range(1, n + 1):
+                if t <= carencia:
+                    # sem pagamento; juros capitalizam
+                    juros = saldo * r_m
+                    amort = 0.0
+                    parcela = 0.0
+                    saldo = saldo + juros
+                else:
+                    juros = saldo * r_m
+                    amort = pmt - juros
+                    saldo = max(saldo - amort, 0.0)
+                    parcela = pmt
+
+                rows.append({"t": t, "Saldo": saldo, "Juros": juros, "Amortização": amort, "Parcela": parcela})
+
+            return pd.DataFrame(rows)
+
+        def cronograma_sac(principal, r_m, n, carencia=0):
+            """
+            SAC com carência (juros capitalizados durante carência, amortização constante após carência).
+            """
+            saldo0 = principal * ((1 + r_m) ** carencia)
+            n_pag = max(n - carencia, 0)
+            if n_pag <= 0:
+                return pd.DataFrame()
+
+            amort_const = saldo0 / n_pag
+
+            saldo = saldo0
+            rows = []
+            for t in range(1, n + 1):
+                if t <= carencia:
+                    juros = saldo * r_m
+                    amort = 0.0
+                    parcela = 0.0
+                    saldo = saldo + juros
+                else:
+                    juros = saldo * r_m
+                    amort = amort_const
+                    parcela = juros + amort
+                    saldo = max(saldo - amort, 0.0)
+
+                rows.append({"t": t, "Saldo": saldo, "Juros": juros, "Amortização": amort, "Parcela": parcela})
+
+            return pd.DataFrame(rows)
+
+        # -----------------------------
+        # Simulação agregada (12 meses)
+        # -----------------------------
+        st.markdown("### 📊 Resultado — 12 meses (agregado)")
+
+        # agregadores
+        agg = pd.DataFrame(index=meses, data={
+            "Entrada de Caixa": 0.0,
+            "Juros": 0.0,
+            "Amortização": 0.0,
+            "Serviço da Dívida": 0.0,   # juros + amort
+            "Saldo Final": 0.0
+        })
+
+        detalhes = []
+
+        for _, op in df_ops.iterrows():
+            nome = str(op.get("Operação", "Operação"))
+            principal = float(op.get("Principal (R$)", 0.0) or 0.0)
+            indexador = str(op.get("Indexador", "Pós (CDI)"))
+            taxa_spread = float(op.get("Taxa/Spread (% a.a.)", 0.0) or 0.0) / 100.0
+            prazo = int(op.get("Prazo (meses)", 0) or 0)
+            carencia = int(op.get("Carência (meses)", 0) or 0)
+            sistema = str(op.get("Sistema", "PRICE")).strip().upper()
+            inicio = int(op.get("Início (mês)", 1) or 1)
+
+            if principal <= 0 or prazo <= 0:
+                continue
+
+            r_m = taxa_mensal(indexador, taxa_spread)
+
+            if sistema == "SAC":
+                cron = cronograma_sac(principal, r_m, prazo, carencia=carencia)
+            else:
+                cron = cronograma_price(principal, r_m, prazo, carencia=carencia)
+
+            if cron.empty:
+                continue
+
+            # alinhar cronograma no eixo "Mês 1..12"
+            # entrada de caixa ocorre no mês "inicio"
+            for m_i in range(1, 13):
+                mes_label = f"Mês {m_i}"
+
+                # entrada no início
+                if m_i == inicio:
+                    agg.loc[mes_label, "Entrada de Caixa"] += principal
+
+                # parcela começa no mês "inicio" + (t-1)
+                t = m_i - inicio + 1
+                if t >= 1 and t <= len(cron):
+                    juros = float(cron.loc[cron["t"] == t, "Juros"].iloc[0])
+                    amort = float(cron.loc[cron["t"] == t, "Amortização"].iloc[0])
+                    saldo = float(cron.loc[cron["t"] == t, "Saldo"].iloc[0])
+
+                    agg.loc[mes_label, "Juros"] += juros
+                    agg.loc[mes_label, "Amortização"] += amort
+                    agg.loc[mes_label, "Saldo Final"] += saldo
+
+            cron["Operação"] = nome
+            cron["Indexador"] = indexador
+            cron["Sistema"] = sistema
+            cron["Taxa_mensal"] = r_m
+            cron["Início_mês"] = inicio
+            detalhes.append(cron)
+
+        agg["Serviço da Dívida"] = agg["Juros"] + agg["Amortização"]
+
+        st.dataframe(
+            agg.reset_index().style.format({
+                "Entrada de Caixa": "R$ {:,.0f}",
+                "Juros": "R$ {:,.0f}",
+                "Amortização": "R$ {:,.0f}",
+                "Serviço da Dívida": "R$ {:,.0f}",
+                "Saldo Final": "R$ {:,.0f}",
+            }),
+            use_container_width=True,
+            height=520
+        )
+
+        # salva para integrar na simulação de caixa depois
+        st.session_state["sim_fin_12m"] = agg.copy()
+
+        st.divider()
+
+        # -----------------------------
+        # Gráficos
+        # -----------------------------
+        st.markdown("### 📈 Gráficos")
+
+        fig_saldo = go.Figure()
+        fig_saldo.add_trace(go.Scatter(
+            x=agg.index.tolist(),
+            y=agg["Saldo Final"].tolist(),
+            mode="lines+markers",
+            name="Saldo Final (somado)"
+        ))
+        fig_saldo.update_layout(height=360, xaxis_title="Mês", yaxis_title="R$")
+        st.plotly_chart(fig_saldo, use_container_width=True)
+
+        fig_serv = go.Figure()
+        fig_serv.add_trace(go.Bar(x=agg.index.tolist(), y=agg["Juros"].tolist(), name="Juros"))
+        fig_serv.add_trace(go.Bar(x=agg.index.tolist(), y=agg["Amortização"].tolist(), name="Amortização"))
+        fig_serv.update_layout(barmode="stack", height=360, xaxis_title="Mês", yaxis_title="R$")
+        st.plotly_chart(fig_serv, use_container_width=True)
+
+        # Detalhe por operação (opcional)
+        with st.expander("🔎 Ver cronograma detalhado por operação"):
+            if detalhes:
+                df_det = pd.concat(detalhes, ignore_index=True)
+                st.dataframe(
+                    df_det.style.format({
+                        "Saldo": "R$ {:,.0f}",
+                        "Juros": "R$ {:,.0f}",
+                        "Amortização": "R$ {:,.0f}",
+                        "Parcela": "R$ {:,.0f}",
+                        "Taxa_mensal": "{:.4%}",
+                    }),
+                    use_container_width=True,
+                    height=520
+                )
+            else:
+                st.info("Nenhuma operação válida cadastrada.")
+    
+    # =================================================
+    # SUBABA — CAIXA (rascunho do que já existe)
+    # =================================================
+    with sub_caixa:
+        st.info("Mantive a aba de caixa como rascunho. Vamos ajustá-la depois integrando o serviço da dívida calculado aqui.")
