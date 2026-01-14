@@ -3441,10 +3441,8 @@ with tab4:
             )
 
         # ---------------- Custo acumulado REAL (juros + tarifas) ----------------
-        dfA["CustoMes"] = dfA["Juros"].astype(float) + dfA.get("Tarifa", 0.0).astype(float)
-        dfB["CustoMes"] = dfB["Juros"].astype(float) + dfB.get("Tarifa", 0.0).astype(float)
-        dfA["CustoAcum"] = dfA["CustoMes"].cumsum()
-        dfB["CustoAcum"] = dfB["CustoMes"].cumsum()
+        dfA["CustoAcum"] = (dfA["Juros"].astype(float) + dfA.get("Tarifa", 0.0).astype(float)).cumsum()
+        dfB["CustoAcum"] = (dfB["Juros"].astype(float) + dfB.get("Tarifa", 0.0).astype(float)).cumsum()
 
         # (se você já tem achar_cruzamento, mantenha)
         cruz = achar_cruzamento(dfA, dfB)
@@ -3483,9 +3481,11 @@ with tab4:
 
         jurosA_y  = serie_por_ano(anA, "JurosAno", anos_max)
         shieldA_y = serie_por_ano(anA, "TaxShieldAno", anos_max)
+        cum_netA_y = np.cumsum([j - s for j, s in zip(jurosA_y, shieldA_y)])
 
         jurosB_y  = serie_por_ano(anB, "JurosAno", anos_max)
         shieldB_y = serie_por_ano(anB, "TaxShieldAno", anos_max)
+        cum_netB_y = np.cumsum([j - s for j, s in zip(jurosB_y, shieldB_y)])
 
         gA, gB = st.columns(2)
 
@@ -3508,14 +3508,26 @@ with tab4:
                 texttemplate="R$ %{y:,.0f}",
                 textposition="auto"
             ))
+            figA.add_trace(go.Scatter(
+                x=anos_axis,
+                y=cum_netA_y,
+                name="Custo Acum. (Líquido)",
+                mode="lines+markers+text",
+                text=[f"R$ {v:,.0f}" if v != 0 else "" for v in cum_netA_y],
+                textposition="top center",
+                line=dict(color="#2c3e50", width=3)
+            ))
+            # Ajuste de margem superior para os números não cortarem
+            y_max_A = max(max(jurosA_y), max(shieldA_y), max(cum_netA_y)) if any(jurosA_y) else 1000
+            
             figA.update_layout(
-                height=380,
-                barmode="overlay",
+                height=480,
+                barmode="group",
                 xaxis_title="Ano",
                 yaxis_title="R$",
+                yaxis=dict(range=[0, y_max_A * 1.3]),
                 legend_title="Componentes",
-                uniformtext_minsize=9,
-                uniformtext_mode="hide"
+                margin=dict(l=10, r=10, t=10, b=10)
             )
             st.plotly_chart(figA, use_container_width=True)
 
@@ -3538,14 +3550,26 @@ with tab4:
                 texttemplate="R$ %{y:,.0f}",
                 textposition="auto"
             ))
+            figB.add_trace(go.Scatter(
+                x=anos_axis,
+                y=cum_netB_y,
+                name="Custo Acum. (Líquido)",
+                mode="lines+markers+text",
+                text=[f"R$ {v:,.0f}" if v != 0 else "" for v in cum_netB_y],
+                textposition="top center",
+                line=dict(color="#2c3e50", width=3)
+            ))
+            # Ajuste de margem superior para os números não cortarem
+            y_max_B = max(max(jurosB_y), max(shieldB_y), max(cum_netB_y)) if any(jurosB_y) else 1000
+            
             figB.update_layout(
-                height=380,
-                barmode="overlay",
+                height=480,
+                barmode="group",
                 xaxis_title="Ano",
                 yaxis_title="R$",
+                yaxis=dict(range=[0, y_max_B * 1.3]),
                 legend_title="Componentes",
-                uniformtext_minsize=9,
-                uniformtext_mode="hide"
+                margin=dict(l=10, r=10, t=10, b=10)
             )
             st.plotly_chart(figB, use_container_width=True)
 
@@ -3557,16 +3581,16 @@ with tab4:
         dfA["TotalPago"] = dfA["Parcela"].astype(float).cumsum()
         dfB["TotalPago"] = dfB["Parcela"].astype(float).cumsum()
 
-        colsA = ["Mes", "Parcela", "Juros", "Amort", "Saldo", "CustoMes", "CustoAcum", "TotalPago"]
-        colsB = ["Mes", "Parcela", "Juros", "Amort", "Saldo", "CustoMes", "CustoAcum", "TotalPago"]
+        colsA = ["Mes", "Parcela", "Juros", "Amort", "Saldo", "CustoAcum", "TotalPago"]
+        colsB = ["Mes", "Parcela", "Juros", "Amort", "Saldo", "CustoAcum", "TotalPago"]
 
         tA = dfA[colsA].copy().rename(columns={
             "Parcela":"Parcela A","Juros":"Juros A","Amort":"Amort A","Saldo":"Saldo A",
-            "CustoMes":"Custo m?s A","CustoAcum":"Custo acum A","TotalPago":"Total Pago A"
+            "CustoAcum":"Custo acum A","TotalPago":"Total Pago A"
         })
         tB = dfB[colsB].copy().rename(columns={
             "Parcela":"Parcela B","Juros":"Juros B","Amort":"Amort B","Saldo":"Saldo B",
-            "CustoMes":"Custo m?s B","CustoAcum":"Custo acum B","TotalPago":"Total Pago B"
+            "CustoAcum":"Custo acum B","TotalPago":"Total Pago B"
         })
 
         tA = tA.drop(columns=["Mes"]).copy()
