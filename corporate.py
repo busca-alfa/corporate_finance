@@ -3317,9 +3317,9 @@ with tab4:
         dfB = pad(dfB, max_prazo)
 
 
+        
         # =========================================================
-        # =========================================================
-        # Gráfico: Parcela — Operação A vs Operação B (somente o simulado)
+        # Gráfico: Parcela — Operação A vs Operação B 
         # =========================================================
         st.markdown("### Parcela — Operação A vs Operação B")
 
@@ -3492,28 +3492,60 @@ with tab4:
         with gA:
             st.markdown("#### Operação A")
             figA = go.Figure()
-            figA.add_trace(go.Bar(x=anos_axis, y=jurosA_y,  name="Despesa financeira (juros)"))
-            figA.add_trace(go.Bar(x=anos_axis, y=shieldA_y, name="Economia IR (tax shield)"))
+            figA.add_trace(go.Bar(
+                x=anos_axis,
+                y=jurosA_y,
+                name="Despesa financeira (juros)",
+                text=jurosA_y,
+                texttemplate="R$ %{y:,.0f}",
+                textposition="auto"
+            ))
+            figA.add_trace(go.Bar(
+                x=anos_axis,
+                y=shieldA_y,
+                name="Economia IR (tax shield)",
+                text=shieldA_y,
+                texttemplate="R$ %{y:,.0f}",
+                textposition="auto"
+            ))
             figA.update_layout(
                 height=380,
                 barmode="overlay",
                 xaxis_title="Ano",
                 yaxis_title="R$",
-                legend_title="Componentes"
+                legend_title="Componentes",
+                uniformtext_minsize=9,
+                uniformtext_mode="hide"
             )
             st.plotly_chart(figA, use_container_width=True)
 
         with gB:
             st.markdown("#### Operação B")
             figB = go.Figure()
-            figB.add_trace(go.Bar(x=anos_axis, y=jurosB_y,  name="Despesa financeira (juros)"))
-            figB.add_trace(go.Bar(x=anos_axis, y=shieldB_y, name="Economia IR (tax shield)"))
+            figB.add_trace(go.Bar(
+                x=anos_axis,
+                y=jurosB_y,
+                name="Despesa financeira (juros)",
+                text=jurosB_y,
+                texttemplate="R$ %{y:,.0f}",
+                textposition="auto"
+            ))
+            figB.add_trace(go.Bar(
+                x=anos_axis,
+                y=shieldB_y,
+                name="Economia IR (tax shield)",
+                text=shieldB_y,
+                texttemplate="R$ %{y:,.0f}",
+                textposition="auto"
+            ))
             figB.update_layout(
                 height=380,
                 barmode="overlay",
                 xaxis_title="Ano",
                 yaxis_title="R$",
-                legend_title="Componentes"
+                legend_title="Componentes",
+                uniformtext_minsize=9,
+                uniformtext_mode="hide"
             )
             st.plotly_chart(figB, use_container_width=True)
 
@@ -3530,17 +3562,40 @@ with tab4:
 
         tA = dfA[colsA].copy().rename(columns={
             "Parcela":"Parcela A","Juros":"Juros A","Amort":"Amort A","Saldo":"Saldo A",
-            "CustoMes":"Custo mês A","CustoAcum":"Custo acum A","TotalPago":"Total Pago A"
+            "CustoMes":"Custo m?s A","CustoAcum":"Custo acum A","TotalPago":"Total Pago A"
         })
         tB = dfB[colsB].copy().rename(columns={
             "Parcela":"Parcela B","Juros":"Juros B","Amort":"Amort B","Saldo":"Saldo B",
-            "CustoMes":"Custo mês B","CustoAcum":"Custo acum B","TotalPago":"Total Pago B"
+            "CustoMes":"Custo m?s B","CustoAcum":"Custo acum B","TotalPago":"Total Pago B"
         })
 
-        spacer = pd.DataFrame({"   ": [""] * len(tA)})  # espaço visual
-        t = pd.concat([tA, spacer, tB.drop(columns=["Mes"])], axis=1)
+        tA = tA.drop(columns=["Mes"]).copy()
+        tA.index = dfA["Mes"].astype(int).tolist()
+        entrada_a = pd.DataFrame([{c: 0.0 for c in tA.columns}], index=[0])
+        entrada_a.loc[0, "Parcela A"] = float(principal_A)
+        tA = pd.concat([entrada_a, tA])
 
-        fmt_cols = {c: "R$ {:,.0f}" for c in t.columns if c not in ["Mes", "   "]}
-        st.dataframe(t.style.format(fmt_cols), use_container_width=True, height=560)
+        tB = tB.drop(columns=["Mes"]).copy()
+        tB.index = dfB["Mes"].astype(int).tolist()
+        entrada_b = pd.DataFrame([{c: 0.0 for c in tB.columns}], index=[0])
+        entrada_b.loc[0, "Parcela B"] = float(principal_B)
+        tB = pd.concat([entrada_b, tB])
+
+        cA, cB = st.columns(2)
+        with cA:
+            fmt_cols_a = {c: "R$ {:,.0f}" for c in tA.columns}
+            st.dataframe(
+                tA.style.format(fmt_cols_a),
+                use_container_width=True,
+                height=altura_dataframe(tA, max_altura=5000)
+            )
+        with cB:
+            fmt_cols_b = {c: "R$ {:,.0f}" for c in tB.columns}
+            st.dataframe(
+                tB.style.format(fmt_cols_b),
+                use_container_width=True,
+                height=altura_dataframe(tB, max_altura=5000)
+            )
+
 
         
